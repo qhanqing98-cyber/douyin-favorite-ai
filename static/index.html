@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>抖音收藏知识库</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --card: #1d212b; --border: #2a2f3a;
+    --text: #e6e9ef; --muted: #8b93a3; --accent: #4f8cff; --accent-2: #9d7bff;
+    --ok: #3fbf7f; --warn: #e5a94f;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    max-width: 860px; margin: 0 auto; padding: 24px 16px 80px;
+  }
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+  h1 { font-size: 20px; font-weight: 700; }
+  .stat { color: var(--muted); font-size: 13px; }
+  .stat b { color: var(--text); }
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  .row { display: flex; gap: 8px; }
+  input[type=text] {
+    flex: 1; background: var(--card); border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; padding: 10px 12px; font-size: 14px; outline: none;
+  }
+  input[type=text]:focus { border-color: var(--accent); }
+  button {
+    background: var(--accent); color: #fff; border: none; border-radius: 8px;
+    padding: 10px 16px; font-size: 14px; cursor: pointer; white-space: nowrap;
+  }
+  button:hover { filter: brightness(1.15); }
+  button.ghost { background: var(--card); border: 1px solid var(--border); color: var(--text); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .label { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+  .job { font-size: 13px; margin-top: 10px; color: var(--muted); min-height: 18px; }
+  .job.err { color: var(--warn); }
+  .job.done { color: var(--ok); }
+  .barwrap { position: relative; margin-top: 10px; height: 22px; background: var(--card); border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+  .bar { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-radius: 999px; transition: width .5s; }
+  .bartext { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--text); }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px; margin-top: 10px;
+  }
+  .card h3 { font-size: 15px; line-height: 1.5; margin-bottom: 6px; }
+  .meta { font-size: 12px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+  .tag { display: inline-block; background: #262c39; color: var(--accent-2); border-radius: 999px; padding: 2px 10px; font-size: 12px; margin: 0 4px 4px 0; }
+  .summary { font-size: 13px; color: #c9d2e0; line-height: 1.7; white-space: pre-wrap; border-left: 3px solid var(--accent); padding-left: 10px; margin: 8px 0; }
+  .transcript { font-size: 13px; color: var(--muted); line-height: 1.7; white-space: pre-wrap; }
+  .transcript.clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .answer { font-size: 14px; line-height: 1.8; white-space: pre-wrap; }
+  .answer .src { color: var(--accent); }
+  .toggle { font-size: 12px; color: var(--accent); cursor: pointer; margin-top: 6px; display: inline-block; }
+  .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 20px 0; }
+  .flag { color: var(--ok); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>⚙️ 抖音收藏知识库</h1>
+  <span class="stat" id="stats">加载中...</span>
+</header>
+
+<section>
+  <div class="label">搜索收藏（标题 / 标签 / 作者 / 转写内容，支持整句）</div>
+  <div class="row">
+    <input type="text" id="q" placeholder="试试：RAG面试 / 焦虑 / 熵增 ..." onkeydown="if(event.key==='Enter')doSearch()">
+    <button onclick="doSearch()">搜索</button>
+    <button class="ghost" onclick="loadLibrary()">收藏库</button>
+  </div>
+  <div class="job" id="searchNote"></div>
+  <div id="results"></div>
+</section>
+
+<section>
+  <div class="label">问 AI（基于已转写内容回答，末尾标注来源）</div>
+  <div class="row">
+    <input type="text" id="question" placeholder="试试：RAG面试会问哪些问题？" onkeydown="if(event.key==='Enter')doAsk()">
+    <button onclick="doAsk()">提问</button>
+  </div>
+  <div id="answer" style="margin-top:10px"></div>
+</section>
+
+<section>
+  <div class="label">任务（后台执行，同一时刻只跑一个）</div>
+  <div class="row">
+    <button class="ghost" id="btnTr" onclick="runJob('/api/transcribe',10,false)">转写 10 条</button>
+    <button id="btnTrAll" onclick="runJob('/api/transcribe',0,true)">一键转写全部</button>
+    <button class="ghost" id="btnSum" onclick="runJob('/api/summarize',10,false)">概要 10 条</button>
+    <button id="btnSumAll" onclick="runJob('/api/summarize',0,true)">一键概要全部</button>
+  </div>
+  <div class="barwrap" id="barwrap" style="display:none">
+    <div class="bar" id="bar"></div>
+    <span class="bartext" id="bartext"></span>
+  </div>
+  <div class="job" id="jobLine"></div>
+</section>
+
+<script>
+const $ = id => document.getElementById(id);
+
+function esc(s) {
+  return (s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function tagsOf(t) {
+  try { return JSON.parse(t || "[]").slice(0, 8); } catch { return []; }
+}
+
+async function loadStats() {
+  try {
+    const s = await (await fetch("/api/stats")).json();
+    $("stats").innerHTML = `共 <b>${s.total}</b> 条 · 已转写 <b>${s.transcribed}</b> · 已生成概要 <b>${s.summarized}</b>`;
+  } catch { $("stats").textContent = "服务未连接"; }
+}
+
+function card(r) {
+  const hasT = r.transcript && !r.transcript.startsWith("【");
+  const flag = hasT ? '<span class="flag">✓ 已转写</span>' : "";
+  const summary = r.summary ? `<div class="summary">${esc(r.summary)}</div>` : "";
+  const tr = r.transcript && !r.transcript.startsWith("【")
+    ? `<div class="transcript clamp" id="tr-${r.aweme_id}">${esc(r.transcript)}</div>
+       <span class="toggle" onclick="const el=document.getElementById('tr-${r.aweme_id}');el.classList.toggle('clamp');this.textContent=el.classList.contains('clamp')?'展开转写':'收起'">展开转写</span>`
+    : "";
+  const link = `https://www.douyin.com/video/${r.aweme_id}`;
+  return `<div class="card">
+    <h3>${esc(r.title)} ${flag}</h3>
+    <div class="meta"><span>👤 ${esc(r.author)}</span><a href="${link}" target="_blank">打开视频 ↗</a></div>
+    <div>${tagsOf(r.tags).map(t => `<span class="tag">#${esc(t)}</span>`).join("")}</div>
+    ${summary}${tr}
+  </div>`;
+}
+
+async function doSearch() {
+  const q = $("q").value.trim();
+  if (!q) return;
+  $("results").innerHTML = '<div class="empty">搜索中...</div>';
+  try {
+    const data = await (await fetch(`/api/videos?q=${encodeURIComponent(q)}`)).json();
+    $("results").innerHTML = data.hits.length
+      ? data.hits.map(card).join("")
+      : '<div class="empty">没有命中。试试更短或别的关键词。</div>';
+    $("searchNote").textContent = data.mode === "search" ? `命中 ${data.hits.length} 条` : "";
+  } catch (e) { $("results").innerHTML = `<div class="empty">请求失败：${esc(String(e))}</div>`; }
+}
+
+async function loadLibrary() {
+  $("results").innerHTML = '<div class="empty">加载中...</div>';
+  const data = await (await fetch("/api/videos?limit=30")).json();
+  $("results").innerHTML = data.hits.map(card).join("");
+  $("searchNote").textContent = "最近采集的 30 条";
+}
+
+async function doAsk() {
+  const question = $("question").value.trim();
+  if (!question) return;
+  $("answer").innerHTML = '<div class="empty">AI 思考中...</div>';
+  try {
+    const data = await (await fetch("/api/ask", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+    })).json();
+    const src = (data.sources || []).map(s =>
+      `<div class="src">【${esc(s.title)}】 <a href="https://www.douyin.com/video/${s.aweme_id}" target="_blank">↗</a></div>`).join("");
+    $("answer").innerHTML = `<div class="card"><div class="answer">${esc(data.answer)}</div>${src}</div>`;
+  } catch (e) { $("answer").innerHTML = `<div class="empty">请求失败：${esc(String(e))}</div>`; }
+}
+
+let polling = null;
+function setButtons(disabled) {
+  for (const id of ["btnTr", "btnTrAll", "btnSum", "btnSumAll"]) $(id).disabled = disabled;
+}
+async function runJob(url, n, all) {
+  try {
+    const r = await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ n, all }),
+    });
+    if (!r.ok) { $("jobLine").textContent = (await r.json()).detail; $("jobLine").className = "job err"; return; }
+  } catch (e) { $("jobLine").textContent = "请求失败：" + e; return; }
+  setButtons(true);
+  $("barwrap").style.display = "block";
+  $("bar").style.width = "0%";
+  polling = setInterval(pollJob, 2000);
+  pollJob();
+}
+
+async function pollJob() {
+  const j = await (await fetch("/api/job")).json();
+  const el = $("jobLine");
+  if (j.running) {
+    el.className = "job";
+    el.textContent = `⏳ ${j.name}：${j.progress}`;
+    if (j.total > 0) {
+      const pct = Math.round(j.done / j.total * 100);
+      $("bar").style.width = pct + "%";
+      $("bartext").textContent = `${j.done} / ${j.total}（${pct}%）`;
+    }
+  } else {
+    clearInterval(polling); polling = null;
+    setButtons(false);
+    $("barwrap").style.display = "none";
+    if (j.error) { el.className = "job err"; el.textContent = `✗ ${j.name} 失败：${j.error}`; }
+    else if (j.progress === "完成") { el.className = "job done"; el.textContent = `✓ ${j.name} 完成`; loadStats(); }
+    else { el.className = "job"; el.textContent = ""; }
+  }
+}
+
+loadStats();
+</script>
+</body>
+</html>
