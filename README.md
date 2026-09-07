@@ -31,7 +31,18 @@
 
 ## 快速开始
 
-### 1. 安装依赖
+### 方式一：一键启动（Windows 推荐）
+
+1. 安装 [Python 3.10+](https://www.python.org/downloads/)（安装时勾选 **Add python.exe to PATH**）
+2. 把整个项目文件夹放到任意位置，**双击 `start.bat`**，脚本会按步骤执行并显示进度：
+   - `[1/4]` 创建虚拟环境
+   - `[2/4]` 安装依赖（清华 pip 源 + npmmirror Chromium 镜像）
+   - `[3/4]` 下载 Whisper 语音模型（**约 461MB，仅首次**，来自 hf-mirror.com 镜像，存到 `models/`，来源/去向/用途都会打印在屏幕上）
+   - `[4/4]` 启动服务并自动打开浏览器
+3. 首次运行会提示：打开 `.env` 填入 `LLM_API_KEY`（[DeepSeek](https://platform.deepseek.com) 等任何 OpenAI 兼容服务的 key），保存后再双击一次 `start.bat`
+4. 页面里点「扫码登录」→「同步收藏夹」→「一键分类全部」，之后就能搜索和转写了
+
+### 方式二：手动安装（跨平台 / 想了解细节）
 
 ```bash
 # 建议在项目目录内建虚拟环境
@@ -44,9 +55,9 @@ $env:PLAYWRIGHT_DOWNLOAD_HOST="https://registry.npmmirror.com/-/binary/playwrigh
 playwright install chromium
 ```
 
-### 2. 配置 LLM（概要 / 问答需要）
+### 配置 LLM（概要 / 问答需要）
 
-在项目根目录建 `.env`：
+复制 `.env.example` 为 `.env`，填入你的 key：
 
 ```ini
 LLM_API_KEY=sk-xxxx          # 任何 OpenAI 兼容服务的 key
@@ -54,7 +65,7 @@ LLM_BASE_URL=https://api.deepseek.com/v1/
 LLM_MODEL=deepseek-chat
 ```
 
-### 3. 首次使用
+### 首次使用
 
 ```bash
 python main.py login     # 弹出浏览器扫码登录，登录态自动落盘
@@ -71,6 +82,17 @@ python main.py summarize 10
 python main.py ask "RAG 面试会问哪些问题？"
 python main.py stats
 ```
+
+### 分享给别人
+
+把项目文件夹打包发出去即可，但**排除这些本机数据目录**（接收方会自动生成自己的）：
+
+```
+排除：.venv/  data/  browser_data/  models/  audio_cache/  __pycache__/  .env
+保留：start.bat  main.py  app/  static/  requirements.txt  .env.example  README.md
+```
+
+接收方只需装 Python，双击 `start.bat`，填一次自己的 API key 就能用。
 
 ## 技术要点
 
