@@ -6,126 +6,231 @@
 <title>抖音收藏知识库</title>
 <style>
   :root {
-    --bg: #0f1115; --panel: #171a21; --card: #1d212b; --border: #2a2f3a;
-    --text: #e6e9ef; --muted: #8b93a3; --accent: #4f8cff; --accent-2: #9d7bff;
-    --ok: #3fbf7f; --warn: #e5a94f;
+    --bg: #0d0f14; --panel: #151823; --card: #1b1f2c; --border: #262c3b;
+    --text: #e8ebf2; --muted: #8b93a5; --accent: #4f8cff; --accent-2: #9d7bff;
+    --ok: #3fbf7f; --warn: #e5a94f; --danger: #e56a6a;
+    --radius: 14px;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scrollbar-width: thin; scrollbar-color: #333b4d transparent; }
   body {
-    background: var(--bg); color: var(--text);
+    background:
+      radial-gradient(600px 300px at 15% -5%, rgba(79,140,255,.10), transparent),
+      radial-gradient(600px 300px at 90% -5%, rgba(157,123,255,.08), transparent),
+      var(--bg);
+    color: var(--text);
     font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
-    max-width: 860px; margin: 0 auto; padding: 24px 16px 80px;
+    max-width: 920px; margin: 0 auto; padding: 28px 16px 90px;
+    min-height: 100vh;
   }
-  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
-  h1 { font-size: 20px; font-weight: 700; }
-  .stat { color: var(--muted); font-size: 13px; }
-  .stat b { color: var(--text); }
-  section { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
-  .row { display: flex; gap: 8px; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #333b4d; border-radius: 8px; }
+  mark { background: rgba(79,140,255,.28); color: #cfe0ff; border-radius: 3px; padding: 0 2px; }
+
+  /* ---------- 头部 ---------- */
+  header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 22px; }
+  h1 { font-size: 21px; font-weight: 800; letter-spacing: .5px;
+       background: linear-gradient(90deg, #7db0ff, #b79aff); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+  .statcards { display: flex; gap: 8px; margin-left: auto; }
+  .scard { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 6px 14px; text-align: center; min-width: 72px; }
+  .scard b { display: block; font-size: 17px; }
+  .scard span { font-size: 11px; color: var(--muted); }
+
+  /* ---------- 区块 ---------- */
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; margin-bottom: 16px;
+            transition: border-color .2s; }
+  section:hover { border-color: #323a4d; }
+  .label { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; margin-bottom: 12px; cursor: pointer; user-select: none; }
+  .label .chev { margin-left: auto; color: var(--muted); font-size: 12px; transition: transform .3s; }
+  section.collapsed .label .chev { transform: rotate(-90deg); }
+  .sec-body { display: grid; grid-template-rows: 1fr; transition: grid-template-rows .3s ease; }
+  section.collapsed .sec-body { grid-template-rows: 0fr; }
+  .sec-inner { overflow: hidden; min-height: 0; }
+  .res-body { display: grid; grid-template-rows: 1fr; transition: grid-template-rows .3s ease; }
+  section.collapsed .res-body, section.results-hidden .res-body { grid-template-rows: 0fr; }
+  .res-inner { overflow: hidden; min-height: 0; }
+
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
   input[type=text] {
-    flex: 1; background: var(--card); border: 1px solid var(--border); color: var(--text);
-    border-radius: 8px; padding: 10px 12px; font-size: 14px; outline: none;
+    flex: 1; min-width: 200px; background: var(--card); border: 1px solid var(--border); color: var(--text);
+    border-radius: 10px; padding: 11px 14px; font-size: 14px; outline: none; transition: border-color .2s, box-shadow .2s;
   }
-  input[type=text]:focus { border-color: var(--accent); }
+  input[type=text]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79,140,255,.15); }
+  input[type=text]::placeholder { color: #5c6478; }
   button {
-    background: var(--accent); color: #fff; border: none; border-radius: 8px;
-    padding: 10px 16px; font-size: 14px; cursor: pointer; white-space: nowrap;
+    background: var(--accent); color: #fff; border: none; border-radius: 10px;
+    padding: 10px 18px; font-size: 14px; font-weight: 500; cursor: pointer; white-space: nowrap;
+    transition: transform .1s, filter .15s, box-shadow .15s;
   }
-  button:hover { filter: brightness(1.15); }
+  button:hover { filter: brightness(1.12); box-shadow: 0 2px 10px rgba(79,140,255,.25); }
+  button:active { transform: scale(.97); }
   button.ghost { background: var(--card); border: 1px solid var(--border); color: var(--text); }
-  button:disabled { opacity: .5; cursor: not-allowed; }
-  .label { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
-  section.collapsed > *:not(.label):not(#searchNote) { display: none; }
-  .label { cursor: pointer; user-select: none; }
-  #searchNote { cursor: pointer; user-select: none; }
-  #searchNote::after { content: " ▾"; color: var(--muted); }
-  section.results-hidden #results { display: none; }
-  section.results-hidden #searchNote::after { content: " ▸"; }
-  .label::after { content: "▾"; float: right; color: var(--muted); }
-  section.collapsed .label::after { content: "▸"; }
+  button.ghost:hover { border-color: var(--accent); box-shadow: none; }
+  button.danger { background: transparent; border: 1px solid var(--danger); color: var(--danger); }
+  button.danger:hover { background: rgba(229,106,106,.12); box-shadow: none; filter: none; }
+  button:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; transform: none; }
+  .hint { font-size: 12px; color: var(--muted); align-self: center; }
+
+  /* ---------- 进度条 / 任务行 ---------- */
   .job { font-size: 13px; margin-top: 10px; color: var(--muted); min-height: 18px; }
   .job.err { color: var(--warn); }
   .job.done { color: var(--ok); }
-  .barwrap { position: relative; margin-top: 10px; height: 22px; background: var(--card); border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
-  .bar { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-radius: 999px; transition: width .5s; }
-  .bartext { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--text); }
-  .card {
-    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
-    padding: 14px; margin-top: 10px;
-  }
-  .card h3 { font-size: 15px; line-height: 1.5; margin-bottom: 6px; }
-  .meta { font-size: 12px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
-  .tag { display: inline-block; background: #262c39; color: var(--accent-2); border-radius: 999px; padding: 2px 10px; font-size: 12px; margin: 0 4px 4px 0; }
-  .summary { font-size: 13px; color: #c9d2e0; line-height: 1.7; white-space: pre-wrap; border-left: 3px solid var(--accent); padding-left: 10px; margin: 8px 0; }
-  .transcript { font-size: 13px; color: var(--muted); line-height: 1.7; white-space: pre-wrap; }
+  .barwrap { position: relative; margin-top: 12px; height: 24px; background: var(--card); border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+  .bar { position: relative; height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-radius: 999px; transition: width .5s; overflow: hidden; }
+  .bar::after { content: ""; position: absolute; inset: 0;
+    background: linear-gradient(45deg, transparent 25%, rgba(255,255,255,.22) 50%, transparent 75%); background-size: 28px 28px;
+    animation: stripe 1s linear infinite; }
+  @keyframes stripe { to { background-position: 28px 0; } }
+  .bartext { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--text); text-shadow: 0 1px 2px rgba(0,0,0,.5); }
+
+  /* ---------- 结果卡片 ---------- */
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-top: 12px;
+          transition: border-color .2s, transform .2s, box-shadow .2s; animation: cardIn .3s ease; }
+  .card:hover { border-color: #3a4a66; transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,.25); }
+  @keyframes cardIn { from { opacity: 0; transform: translateY(6px); } }
+  .card-top { display: flex; align-items: flex-start; gap: 10px; }
+  .card-top h3 { flex: 1; font-size: 15px; line-height: 1.55; font-weight: 600; }
+  .badges { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+  .meta { font-size: 12px; color: var(--muted); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0 6px; }
+  .ava { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%;
+         background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; font-size: 11px; flex-shrink: 0; }
+  .tag { display: inline-block; background: #232a3a; color: #a89aff; border-radius: 999px; padding: 2px 10px; font-size: 12px; margin: 0 6px 6px 0; }
+  .cat { color: var(--accent-2); font-size: 12px; border: 1px solid rgba(157,123,255,.5); border-radius: 999px; padding: 1px 9px; }
+  .flag { color: var(--ok); font-size: 12px; background: rgba(63,191,127,.12); border-radius: 999px; padding: 1px 9px; }
+  .summary { font-size: 13px; color: #c9d2e0; line-height: 1.75; white-space: pre-wrap;
+             border-left: 3px solid var(--accent); background: rgba(79,140,255,.06); border-radius: 0 8px 8px 0; padding: 8px 12px; margin: 10px 0; }
+  .transcript { font-size: 13px; color: var(--muted); line-height: 1.75; white-space: pre-wrap; }
   .transcript.clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
-  .answer { font-size: 14px; line-height: 1.8; white-space: pre-wrap; }
-  .answer .src { color: var(--accent); }
+  .openlink { font-size: 12px; border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; color: var(--accent); transition: border-color .15s; }
+  .openlink:hover { border-color: var(--accent); text-decoration: none; }
   .toggle { font-size: 12px; color: var(--accent); cursor: pointer; margin-top: 6px; display: inline-block; }
-  .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 20px 0; }
-  .flag { color: var(--ok); font-size: 12px; }
-  .chip { display: inline-block; border: 1px solid var(--border); background: var(--card); color: var(--muted); border-radius: 999px; padding: 3px 12px; font-size: 12px; margin: 0 6px 6px 0; cursor: pointer; }
+  .cbwrap { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); cursor: pointer;
+            border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; flex-shrink: 0; transition: border-color .15s; }
+  .cbwrap:hover { border-color: var(--accent); }
+  input[type=checkbox] { accent-color: var(--accent); width: 14px; height: 14px; }
+
+  /* ---------- AI 问答 ---------- */
+  .answer { font-size: 14px; line-height: 1.85; white-space: pre-wrap; }
+  .src { font-size: 12px; color: var(--accent); margin-top: 6px; }
+  .typing { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; padding: 14px 0; }
+  .dots { display: inline-flex; gap: 4px; }
+  .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: bounce 1.2s infinite; }
+  .dots i:nth-child(2) { animation-delay: .15s; } .dots i:nth-child(3) { animation-delay: .3s; }
+  @keyframes bounce { 0%, 60%, 100% { transform: translateY(0); opacity: .5; } 30% { transform: translateY(-5px); opacity: 1; } }
+
+  /* ---------- 分类 chips ---------- */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .chip { display: inline-block; border: 1px solid var(--border); background: var(--card); color: var(--muted); border-radius: 999px;
+          padding: 4px 13px; font-size: 12px; cursor: pointer; transition: all .15s; }
   .chip:hover { border-color: var(--accent); color: var(--text); }
-  .chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .cat { color: var(--accent-2); font-size: 12px; border: 1px solid var(--accent-2); border-radius: 999px; padding: 1px 8px; margin-left: 6px; }
-  input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; vertical-align: middle; margin-right: 6px; }
+  .chip.on { background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-color: transparent; color: #fff; }
+  .chip b { font-weight: 600; margin-left: 3px; }
+
+  /* ---------- 骨架屏 / 空状态 ---------- */
+  .sk { height: 13px; border-radius: 6px; margin-bottom: 10px;
+        background: linear-gradient(90deg, #20263a 25%, #2a3149 50%, #20263a 75%); background-size: 200% 100%;
+        animation: shimmer 1.2s linear infinite; }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+  .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 26px 0; }
+  .empty .big { font-size: 26px; display: block; margin-bottom: 8px; }
+
+  /* ---------- 任务历史 ---------- */
+  .hrow { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); padding: 5px 0; border-bottom: 1px dashed rgba(255,255,255,.05); }
+  .hrow:last-child { border-bottom: none; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .hrow .del { margin-left: auto; cursor: pointer; opacity: 0; transition: opacity .15s; color: var(--muted); }
+  .hrow:hover .del { opacity: 1; }
+  .hrow .del:hover { color: var(--danger); }
+
+  /* ---------- Toast ---------- */
+  .toast { position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%) translateY(20px); opacity: 0; pointer-events: none;
+           background: #222a3d; border: 1px solid var(--border); color: var(--text); font-size: 13px; border-radius: 10px;
+           padding: 10px 20px; transition: all .25s; z-index: 99; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.err { border-color: var(--warn); color: var(--warn); }
+  .toast.ok { border-color: var(--ok); color: var(--ok); }
+
+  #searchNote { cursor: pointer; user-select: none; }
+  .btn-group { display: flex; flex-direction: column; gap: 6px; }
+  .btn-group .cap { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  .grp { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+  @media (max-width: 640px) {
+    .statcards { margin-left: 0; width: 100%; justify-content: space-between; }
+    .scard { flex: 1; }
+    .badges { justify-content: flex-start; }
+  }
 </style>
 </head>
 <body>
 <header>
   <h1>⚙️ 抖音收藏知识库</h1>
-  <span class="stat" id="stats">加载中...</span>
+  <div class="statcards">
+    <div class="scard"><b id="stTotal">–</b><span>收藏</span></div>
+    <div class="scard"><b id="stTr">–</b><span>已转写</span></div>
+    <div class="scard"><b id="stSum">–</b><span>已概要</span></div>
+  </div>
 </header>
 
-<section>
-  <div class="label">搜索收藏（标题 / 标签 / 作者 / 转写内容，支持整句）</div>
-  <div class="row">
-    <input type="text" id="q" placeholder="试试：RAG面试 / 焦虑 / 熵增 ..." onkeydown="if(event.key==='Enter')doSearch()">
-    <button onclick="doSearch()">搜索</button>
-    <button class="ghost" onclick="loadLibrary()">收藏库</button>
-  </div>
-  <div id="catChips" style="margin-top:10px"></div>
-  <div class="row" style="margin-top:10px; align-items:center">
-    <button id="btnSel" onclick="transcribeSelected()" disabled>转写勾选 (0)</button>
-    <span class="stat">勾选搜索结果里想转写的视频，点这里按需转写</span>
-  </div>
+<section id="secSearch">
+  <div class="label">🔍 搜索收藏 <span class="hint">标题 / 标签 / 作者 / 转写内容，支持整句，快捷键 /</span><span class="chev">▼</span></div>
+  <div class="sec-body"><div class="sec-inner">
+    <div class="row">
+      <input type="text" id="q" placeholder="试试：RAG面试 / 焦虑 / 熵增 ..." onkeydown="if(event.key==='Enter')doSearch()">
+      <button onclick="doSearch()">搜索</button>
+      <button class="ghost" onclick="loadLibrary()">收藏库</button>
+    </div>
+    <div class="chips" id="catChips"></div>
+    <div class="row" style="margin-top:6px; align-items:center">
+      <button id="btnSel" onclick="transcribeSelected()" disabled>转写勾选 (0)</button>
+      <span class="hint">勾选搜索结果里想转写的视频，点这里按需转写</span>
+    </div>
+  </div></div>
   <div class="job" id="searchNote"></div>
-  <div id="results"></div>
+  <div class="res-body"><div class="res-inner"><div id="results"></div></div></div>
 </section>
 
 <section>
-  <div class="label">问 AI（基于已转写内容回答，末尾标注来源）</div>
-  <div class="row">
-    <input type="text" id="question" placeholder="试试：RAG面试会问哪些问题？" onkeydown="if(event.key==='Enter')doAsk()">
-    <button onclick="doAsk()">提问</button>
-  </div>
-  <div id="answer" style="margin-top:10px"></div>
+  <div class="label">💬 问 AI <span class="hint">基于已转写内容回答，末尾标注来源</span><span class="chev">▼</span></div>
+  <div class="sec-body"><div class="sec-inner">
+    <div class="row">
+      <input type="text" id="question" placeholder="试试：RAG面试会问哪些问题？" onkeydown="if(event.key==='Enter')doAsk()">
+      <button onclick="doAsk()">提问</button>
+    </div>
+    <div id="answer" style="margin-top:12px"></div>
+  </div></div>
 </section>
 
 <section>
-  <div class="label">任务（后台执行，同一时刻只跑一个）</div>
-  <div class="row">
-    <button class="ghost" id="btnTr" onclick="runJob('/api/transcribe',10,false)">转写 10 条</button>
-    <button id="btnTrAll" onclick="runJob('/api/transcribe',0,true)">一键转写全部</button>
-    <button class="ghost" id="btnSum" onclick="runJob('/api/summarize',10,false)">概要 10 条</button>
-    <button id="btnSumAll" onclick="runJob('/api/summarize',0,true)">一键概要全部</button>
-    <button id="btnCls" onclick="runJob('/api/classify',0,false)">一键分类全部</button>
-  </div>
-  <div class="row" style="margin-top:8px">
-    <button class="ghost" id="btnLogin" onclick="runJob('/api/login',0,false)">📱 扫码登录</button>
-    <button class="ghost" id="btnCrawl" onclick="runJob('/api/crawl',0,false)">🔄 同步收藏夹</button>
-    <span class="stat">登录过期或收藏夹有更新时用</span>
-  </div>
-  <div class="barwrap" id="barwrap" style="display:none">
-    <div class="bar" id="bar"></div>
-    <span class="bartext" id="bartext"></span>
-  </div>
-  <div class="job" id="jobLine"></div>
-  <button class="ghost" id="btnCancel" style="display:none" onclick="cancelJob()">✕ 取消任务</button>
-  <div id="history" style="margin-top:12px"></div>
+  <div class="label">🛠 任务 <span class="hint">后台执行，同一时刻只跑一个</span><span class="chev">▼</span></div>
+  <div class="sec-body"><div class="sec-inner">
+    <div class="btn-group">
+      <div class="grp"><span class="cap">内容</span>
+        <button class="ghost" id="btnTr" onclick="runJob('/api/transcribe',10,false)">转写 10 条</button>
+        <button id="btnTrAll" onclick="runJob('/api/transcribe',0,true)">一键转写全部</button>
+        <button class="ghost" id="btnSum" onclick="runJob('/api/summarize',10,false)">概要 10 条</button>
+        <button id="btnSumAll" onclick="runJob('/api/summarize',0,true)">一键概要全部</button>
+        <button id="btnCls" onclick="runJob('/api/classify',0,false)">一键分类全部</button>
+      </div>
+      <div class="grp"><span class="cap">账号</span>
+        <button class="ghost" id="btnLogin" onclick="runJob('/api/login',0,false)">📱 扫码登录</button>
+        <button class="ghost" id="btnCrawl" onclick="runJob('/api/crawl',0,false)">🔄 同步收藏夹</button>
+        <span class="hint">登录过期或收藏夹有更新时用</span>
+      </div>
+    </div>
+    <div class="barwrap" id="barwrap" style="display:none">
+      <div class="bar" id="bar"></div>
+      <span class="bartext" id="bartext"></span>
+    </div>
+    <div class="job" id="jobLine"></div>
+    <button class="danger" id="btnCancel" style="display:none" onclick="cancelJob()">✕ 取消任务</button>
+    <div id="history" style="margin-top:12px"></div>
+  </div></div>
 </section>
+
+<div class="toast" id="toast"></div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -137,28 +242,62 @@ function tagsOf(t) {
   try { return JSON.parse(t || "[]").slice(0, 8); } catch { return []; }
 }
 
+// ---------- Toast 提示 ----------
+let toastTimer;
+function toast(msg, cls = "ok") {
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = "toast show " + cls;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+// ---------- 关键词高亮 ----------
+let lastQuery = "";
+function hl(text) {
+  const safe = esc(text);
+  if (!lastQuery || !safe) return safe;
+  let out = safe;
+  for (const t of lastQuery.split(/\s+/).filter(Boolean)) {
+    const re = new RegExp(t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    out = out.replace(re, m => `<mark>${m}</mark>`);
+  }
+  return out;
+}
+
 async function loadStats() {
   try {
     const s = await (await fetch("/api/stats")).json();
-    $("stats").innerHTML = `共 <b>${s.total}</b> 条 · 已转写 <b>${s.transcribed}</b> · 已生成概要 <b>${s.summarized}</b>`;
-  } catch { $("stats").textContent = "服务未连接"; }
+    $("stTotal").textContent = s.total;
+    $("stTr").textContent = s.transcribed;
+    $("stSum").textContent = s.summarized;
+  } catch { $("stTotal").textContent = "?"; toast("服务未连接", "err"); }
 }
+
+// ---------- 骨架屏 ----------
+const skeleton = () => Array(3).fill(
+  `<div class="card"><div class="sk" style="width:65%"></div><div class="sk" style="width:40%"></div><div class="sk" style="width:88%;height:40px"></div></div>`
+).join("");
+
+const emptyBox = (icon, text) => `<div class="empty"><span class="big">${icon}</span>${text}</div>`;
 
 function card(r) {
   const hasT = r.transcript && !r.transcript.startsWith("【");
   const flag = hasT ? '<span class="flag">✓ 已转写</span>' : "";
-  const cb = hasT ? "" : `<label><input type="checkbox" onchange="toggleSel('${r.aweme_id}', this.checked)">转写</label>`;
+  const cb = hasT ? "" : `<label class="cbwrap"><input type="checkbox" onchange="toggleSel('${r.aweme_id}', this.checked)">转写</label>`;
   const cat = r.category ? `<span class="cat">${esc(r.category)}</span>` : "";
-  const summary = r.summary ? `<div class="summary">${esc(r.summary)}</div>` : "";
-  const tr = r.transcript && !r.transcript.startsWith("【")
-    ? `<div class="transcript clamp" id="tr-${r.aweme_id}">${esc(r.transcript)}</div>
+  const summary = r.summary
+    ? `<div class="summary">${esc(r.summary)}<span class="toggle" onclick="copyText(this.dataset.s)" data-s="${esc(r.summary).replace(/"/g,"&quot;")}">复制</span></div>`
+    : "";
+  const tr = hasT
+    ? `<div class="transcript clamp" id="tr-${r.aweme_id}">${hl(r.transcript)}</div>
        <span class="toggle" onclick="const el=document.getElementById('tr-${r.aweme_id}');el.classList.toggle('clamp');this.textContent=el.classList.contains('clamp')?'展开转写':'收起'">展开转写</span>`
     : "";
   const link = `https://www.douyin.com/video/${r.aweme_id}`;
   return `<div class="card">
-    <h3>${cb}${esc(r.title)} ${flag}${cat}</h3>
-    <div class="meta"><span>👤 ${esc(r.author)}</span><a href="${link}" target="_blank">打开视频 ↗</a></div>
-    <div>${tagsOf(r.tags).map(t => `<span class="tag">#${esc(t)}</span>`).join("")}</div>
+    <div class="card-top">${cb}<h3>${hl(r.title)}</h3><div class="badges">${flag}${cat}</div></div>
+    <div class="meta"><span class="ava">${esc((r.author || "?").charAt(0).toUpperCase())}</span><span>${esc(r.author)}</span><a class="openlink" href="${link}" target="_blank">打开视频 ↗</a></div>
+    <div>${tagsOf(r.tags).map(t => `<span class="tag">#${hl(t)}</span>`).join("")}</div>
     ${summary}${tr}
   </div>`;
 }
@@ -176,17 +315,25 @@ async function transcribeSelected() {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ids: [...selected] }),
   });
-  if (r.ok) { selected.clear(); $("btnSel").textContent = "转写勾选 (0)"; $("btnSel").disabled = true; watchJob(); }
-  else { const d = await r.json(); $("jobLine").textContent = d.detail; $("jobLine").className = "job err"; }
+  if (r.ok) {
+    selected.clear(); $("btnSel").textContent = "转写勾选 (0)"; $("btnSel").disabled = true;
+    toast("已开始转写勾选的视频");
+    watchJob();
+  } else { const d = await r.json(); toast(d.detail, "err"); }
+}
+
+function copyText(s) {
+  navigator.clipboard.writeText(s).then(() => toast("已复制"), () => toast("复制失败", "err"));
 }
 
 // ---------- 分类筛选 ----------
 let curCat = "";
+let lastView = "library";
 async function loadCategories() {
   const data = await (await fetch("/api/categories")).json();
   const chips = data.counts.map(c =>
-    `<span class="chip${c.category === curCat ? " on" : ""}" onclick="pickCat('${esc(c.category)}')">${esc(c.category)} ${c.n}</span>`).join("");
-  const un = data.unclassified ? `<span class="chip" style="opacity:.6" onclick="pickCat('__none__')">未分类 ${data.unclassified}</span>` : "";
+    `<span class="chip${c.category === curCat ? " on" : ""}" onclick="pickCat('${esc(c.category)}')">${esc(c.category)}<b>${c.n}</b></span>`).join("");
+  const un = data.unclassified ? `<span class="chip" style="opacity:.6" onclick="pickCat('__none__')">未分类<b>${data.unclassified}</b></span>` : "";
   $("catChips").innerHTML = `<span class="chip${curCat === "" ? " on" : ""}" onclick="pickCat('')">全部</span>${chips}${un}`;
 }
 function pickCat(c) { curCat = c; loadCategories(); loadLibrary(); }
@@ -194,30 +341,32 @@ function pickCat(c) { curCat = c; loadCategories(); loadLibrary(); }
 async function doSearch() {
   const q = $("q").value.trim();
   if (!q) return;
-  $("results").innerHTML = '<div class="empty">搜索中...</div>';
+  lastQuery = q; lastView = "search";
+  $("results").innerHTML = skeleton();
   try {
     const data = await (await fetch(`/api/videos?q=${encodeURIComponent(q)}`)).json();
     $("results").innerHTML = data.hits.length
       ? data.hits.map(card).join("")
-      : '<div class="empty">没有命中。试试更短或别的关键词。</div>';
+      : emptyBox("🔎", "没有命中。试试更短或别的关键词。");
     $("searchNote").textContent = data.mode === "search" ? `命中 ${data.hits.length} 条` : "";
-  } catch (e) { $("results").innerHTML = `<div class="empty">请求失败：${esc(String(e))}</div>`; }
+  } catch (e) { $("results").innerHTML = emptyBox("⚠️", `请求失败：${esc(String(e))}`); }
 }
 
 async function loadLibrary() {
-  $("results").innerHTML = '<div class="empty">加载中...</div>';
+  lastView = "library"; lastQuery = "";
+  $("results").innerHTML = skeleton();
   const cat = curCat === "__none__" ? "__none__" : curCat;
   const data = await (await fetch(`/api/videos?limit=30&category=${encodeURIComponent(cat)}`)).json();
   $("results").innerHTML = data.hits.length
     ? data.hits.map(card).join("")
-    : '<div class="empty">该分类下暂时没有视频。</div>';
+    : emptyBox("📭", "该分类下暂时没有视频。");
   $("searchNote").textContent = curCat === "" ? "最近采集的 30 条" : `分类「${curCat === "__none__" ? "未分类" : curCat}」前 30 条`;
 }
 
 async function doAsk() {
   const question = $("question").value.trim();
   if (!question) return;
-  $("answer").innerHTML = '<div class="empty">AI 思考中...</div>';
+  $("answer").innerHTML = `<div class="typing"><span class="dots"><i></i><i></i><i></i></span>AI 正在检索已转写内容并思考…</div>`;
   try {
     const data = await (await fetch("/api/ask", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -225,15 +374,16 @@ async function doAsk() {
     })).json();
     const src = (data.sources || []).map(s =>
       `<div class="src">【${esc(s.title)}】 <a href="https://www.douyin.com/video/${s.aweme_id}" target="_blank">↗</a></div>`).join("");
-    $("answer").innerHTML = `<div class="card"><div class="answer">${esc(data.answer)}</div>${src}</div>`;
-  } catch (e) { $("answer").innerHTML = `<div class="empty">请求失败：${esc(String(e))}</div>`; }
+    $("answer").innerHTML = `<div class="card"><div class="answer">${esc(data.answer)}${src}
+      <span class="toggle" onclick="copyText(this.closest('.card').querySelector('.answer').textContent)">复制回答</span></div></div>`;
+  } catch (e) { $("answer").innerHTML = emptyBox("⚠️", `请求失败：${esc(String(e))}`); }
 }
 
+// ---------- 任务执行与轮询 ----------
 let polling = null;
 function setButtons(disabled) {
   for (const id of ["btnTr", "btnTrAll", "btnSum", "btnSumAll", "btnCls", "btnLogin", "btnCrawl"]) $(id).disabled = disabled;
 }
-// 勾选转写走同一套轮询，只是入口不同
 function watchJob() {
   setButtons(true);
   $("barwrap").style.display = "block";
@@ -247,8 +397,9 @@ async function runJob(url, n, all) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ n, all }),
     });
-    if (!r.ok) { $("jobLine").textContent = (await r.json()).detail; $("jobLine").className = "job err"; return; }
-  } catch (e) { $("jobLine").textContent = "请求失败：" + e; return; }
+    if (!r.ok) { toast((await r.json()).detail, "err"); return; }
+    toast("任务已开始");
+  } catch (e) { toast("请求失败：" + e, "err"); return; }
   watchJob();
 }
 
@@ -269,9 +420,12 @@ async function pollJob() {
     setButtons(false);
     $("btnCancel").style.display = "none";
     $("barwrap").style.display = "none";
-    if (j.error) { el.className = "job err"; el.textContent = `✗ ${j.name} 失败：${j.error}`; }
+    if (j.error) { el.className = "job err"; el.textContent = `✗ ${j.name} 失败：${j.error}`; toast(`${j.name} 失败`, "err"); }
     else if (j.progress === "完成" || j.progress === "已取消") {
-      el.className = "job done"; el.textContent = `✓ ${j.name} ${j.progress}`; loadStats(); loadCategories();
+      el.className = "job done"; el.textContent = `✓ ${j.name} ${j.progress}`;
+      toast(`${j.name} ${j.progress}`);
+      loadStats(); loadCategories();
+      if (lastView === "library") loadLibrary();
     }
     else { el.className = "job"; el.textContent = ""; }
   }
@@ -283,15 +437,12 @@ function fmtSecs(s) {
 }
 function renderHistory(items) {
   if (!items.length) { $("history").innerHTML = ""; return; }
-  const icon = { "完成": "✓", "已取消": "⊘", "失败": "✗" };
-  const color = { "完成": "var(--ok)", "已取消": "var(--muted)", "失败": "var(--warn)" };
+  const c = { "完成": "var(--ok)", "已取消": "var(--muted)", "失败": "var(--warn)" };
   const rows = items.map(h =>
-    `<div class="stat" style="padding:3px 0">
-       <b style="color:${color[h.status] || 'var(--muted)'}">${icon[h.status] || "·"} ${h.status}</b>
-       ｜${esc(h.name)}｜${h.done}/${h.total} 条｜${fmtSecs(h.seconds)}
-       <span class="toggle" onclick="delHistory(${h.id})" style="color:var(--muted)">✕</span>
-     </div>`).join("");
-  $("history").innerHTML = `<div class="label" style="margin-bottom:4px">最近任务 <span class="toggle" onclick="clearHistory()" style="float:none">清空</span></div>${rows}`;
+    `<div class="hrow"><span class="dot" style="background:${c[h.status] || "var(--muted)"}"></span>
+       <b style="color:${c[h.status] || "var(--muted)"}">${esc(h.status)}</b>｜${esc(h.name)}｜${h.done}/${h.total} 条｜${fmtSecs(h.seconds)}
+       <span class="del" onclick="delHistory(${h.id})" title="删除记录">✕</span></div>`).join("");
+  $("history").innerHTML = `<div class="hint" style="margin-bottom:6px">最近任务 <span class="toggle" onclick="clearHistory()">清空</span></div>${rows}`;
 }
 async function delHistory(id) {
   await fetch(`/api/history/${id}`, { method: "DELETE" });
@@ -300,18 +451,25 @@ async function delHistory(id) {
 async function clearHistory() {
   await fetch("/api/history", { method: "DELETE" });
   $("history").innerHTML = "";
+  toast("任务记录已清空");
 }
 
 async function cancelJob() {
-  try { await fetch("/api/cancel", { method: "POST" }); } catch {}
+  try { await fetch("/api/cancel", { method: "POST" }); toast("已请求取消，等待当前条目结束", "err"); } catch {}
 }
 
+// ---------- 初始化 ----------
 loadStats();
 loadCategories();
-// 区块标题可点击收起/展开
+loadLibrary();
+// 区块标题点击收起/展开（含平滑动画）
 document.querySelectorAll(".label").forEach(l => l.onclick = () => l.parentElement.classList.toggle("collapsed"));
-// 搜索结果区的"命中 X 条"摘要行：点击只收起/展开它下面的结果列表
+// "命中 X 条"摘要行：点击只收起/展开结果列表
 $("searchNote").onclick = () => $("searchNote").parentElement.classList.toggle("results-hidden");
+// 快捷键：/ 聚焦搜索框（输入框内除外）
+document.addEventListener("keydown", e => {
+  if (e.key === "/" && document.activeElement.tagName !== "INPUT") { e.preventDefault(); $("q").focus(); }
+});
 // 页面刷新时若有任务正在跑，恢复轮询和按钮状态
 (async function resumeJobWatch() {
   const j = await (await fetch("/api/job")).json();
