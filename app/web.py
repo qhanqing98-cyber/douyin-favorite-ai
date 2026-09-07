@@ -233,7 +233,8 @@ def summarize(req: JobReq):
 
 
 # 分类固定集合：控制 LLM 输出可预期，前端筛选也按这套来
-CATEGORIES = ["AI技术", "编程开发", "软件工具", "知识学习", "心理成长", "小说写作", "游戏娱乐", "生活其他"]
+CATEGORIES = ["AI技术", "编程开发", "软件工具", "知识学习", "商业财经", "人文哲思",
+              "科普科技", "心理成长", "小说写作", "游戏娱乐", "生活其他"]
 
 
 @app.get("/api/categories")
@@ -251,6 +252,8 @@ def classify(req: JobReq):
     def run():
         from app import llm
 
+        if req.all:
+            db.reset_categories()  # all=true：清空重分，按当前类别集合重新归类
         cat_line = "、".join(CATEGORIES)
         total = db.count_unclassified()
         done = 0
@@ -264,6 +267,7 @@ def classify(req: JobReq):
             )
             prompt = (
                 f"把每个视频分到以下类别之一：{cat_line}。\n"
+                "如果某个视频不属于其中任何一类（或信息太少无法判断），必须归入「生活其他」，不要自创类别。\n"
                 "只输出一个 JSON 对象，格式 {\"视频id\": \"类别\", ...}，不要输出任何其他文字。\n"
                 "视频列表（id|标题|作者|标签）：\n" + listing
             )

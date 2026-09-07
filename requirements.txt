@@ -1,1 +1,8 @@
 playwright>=1.45
+fastapi>=0.110
+uvicorn>=0.29
+jieba>=0.42
+yt-dlp>=2025.1.1
+faster-whisper>=1.0
+opencc-python-reimplemented>=0.1.7
+openai>=1.30

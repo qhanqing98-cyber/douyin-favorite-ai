@@ -213,6 +213,7 @@
         <button class="ghost" id="btnSum" onclick="runJob('/api/summarize',10,false)">概要 10 条</button>
         <button id="btnSumAll" onclick="runJob('/api/summarize',0,true)">一键概要全部</button>
         <button id="btnCls" onclick="runJob('/api/classify',0,false)">一键分类全部</button>
+        <button class="ghost" id="btnReCls" onclick="runJob('/api/classify',0,true)">重新分类全部</button>
       </div>
       <div class="grp"><span class="cap">账号</span>
         <button class="ghost" id="btnLogin" onclick="runJob('/api/login',0,false)">📱 扫码登录</button>
@@ -382,7 +383,7 @@ async function doAsk() {
 // ---------- 任务执行与轮询 ----------
 let polling = null;
 function setButtons(disabled) {
-  for (const id of ["btnTr", "btnTrAll", "btnSum", "btnSumAll", "btnCls", "btnLogin", "btnCrawl"]) $(id).disabled = disabled;
+  for (const id of ["btnTr", "btnTrAll", "btnSum", "btnSumAll", "btnCls", "btnReCls", "btnLogin", "btnCrawl"]) $(id).disabled = disabled;
 }
 function watchJob() {
   setButtons(true);

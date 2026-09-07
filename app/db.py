@@ -321,6 +321,12 @@ def set_category(aweme_id: str, category: str) -> None:
         )
 
 
+def reset_categories() -> None:
+    """清空所有分类（换类别集合后重新分类用）。"""
+    with get_conn() as conn:
+        conn.execute("UPDATE favorites SET category = NULL")
+
+
 def category_counts() -> list[dict]:
     with get_conn() as conn:
         rows = conn.execute(
