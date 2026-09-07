@@ -95,10 +95,11 @@ def _transcribe_file(path: Path, model_size: str) -> str:
     return "".join(parts).strip()
 
 
-def run(limit: int = 10, model_size: str = "small", progress=None) -> int:
+def run(limit: int = 10, model_size: str = "small", progress=None, ids=None) -> int:
     """批量转写。返回成功写入的条数（含兜底标记的也算写入）。
 
     progress: 可选回调 progress(done, total, title)，Web 端用来更新进度条。
+    ids: 可选，只转写这些 aweme_id（搜索结果勾选的按需转写）。
     """
     from app import crawler, db
 
@@ -106,7 +107,7 @@ def run(limit: int = 10, model_size: str = "small", progress=None) -> int:
         print("导出登录 cookies...", flush=True)
         crawler.export_cookies()
 
-    rows = db.get_untranscribed(limit)
+    rows = db.get_untranscribed(limit, ids=ids)
     total = len(rows)
     print(f"待转写 {total} 条", flush=True)
     ok = 0

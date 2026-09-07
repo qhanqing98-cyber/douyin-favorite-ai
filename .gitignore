@@ -6,3 +6,4 @@ data/
 audio_cache/
 models/
 .env
+workbuddy\memory/

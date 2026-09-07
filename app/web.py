@@ -51,12 +51,12 @@ def stats():
 
 
 @app.get("/api/videos")
-def videos(q: str = "", limit: int = 30):
-    """q 为空 → 收藏库列表；q 非空 → 全文搜索。"""
+def videos(q: str = "", limit: int = 30, category: str = ""):
+    """q 非空 → 全文搜索；否则按分类（可空）列收藏库。"""
     if q.strip():
         rows = db.search(q, limit=limit)
         return {"mode": "search", "hits": [dict(r) for r in rows]}
-    rows = db.list_videos(limit=limit)
+    rows = db.list_videos(limit=limit, category=category or None)
     return {"mode": "list", "hits": [dict(r) for r in rows]}
 
 
@@ -96,6 +96,7 @@ def ask(req: AskReq):
 class JobReq(BaseModel):
     n: int = 10
     all: bool = False  # True = 跑完全部剩余
+    ids: list[str] = []  # 非空 = 只转写这些视频（搜索结果勾选）
 
 
 @app.post("/api/transcribe")
@@ -103,16 +104,27 @@ def transcribe(req: JobReq):
     from app import db
     from app import transcribe
 
-    total = db.count_untranscribed() if req.all else req.n
+    if req.ids:
+        total = len(db.get_untranscribed(10**9, ids=req.ids))
+        name = f"转写勾选（可转 {total} 条）"
+        limit, ids = 10**9, req.ids
+    elif req.all:
+        total = db.count_untranscribed()
+        name = f"一键转写全部（待转写 {total}）"
+        limit, ids = 10**9, None
+    else:
+        total = min(req.n, db.count_untranscribed())
+        name = f"转写 {req.n} 条（待转写 {total}）"
+        limit, ids = req.n, None
 
     def run():
         def on_progress(done: int, t: int, title: str):
             _job["done"], _job["total"] = done, t
             _job["progress"] = title[:24]
 
-        transcribe.run(limit=10**9 if req.all else req.n, progress=on_progress)
+        transcribe.run(limit=limit, progress=on_progress, ids=ids)
 
-    _start_job(f"{'一键转写全部' if req.all else f'转写 {req.n} 条'}（待转写 {total}）", run)
+    _start_job(name, run)
     return {"ok": True}
 
 
@@ -139,6 +151,60 @@ def summarize(req: JobReq):
                 remaining -= 1
 
     _start_job(f"{'一键概要全部' if req.all else f'概要 {req.n} 条'}（待概要 {total}）", run)
+    return {"ok": True}
+
+
+# 分类固定集合：控制 LLM 输出可预期，前端筛选也按这套来
+CATEGORIES = ["AI技术", "编程开发", "软件工具", "知识学习", "心理成长", "小说写作", "游戏娱乐", "生活其他"]
+
+
+@app.get("/api/categories")
+def categories():
+    counts = db.category_counts()
+    unclassified = db.count_unclassified()
+    return {"counts": counts, "unclassified": unclassified}
+
+
+@app.post("/api/classify")
+def classify(req: JobReq):
+    """用 LLM 按标题/标签/作者给视频打分类，循环处理直到没有未分类。"""
+    import json as _json
+
+    def run():
+        from app import llm
+
+        cat_line = "、".join(CATEGORIES)
+        total = db.count_unclassified()
+        done = 0
+        while True:
+            rows = db.get_unclassified(40)
+            if not rows:
+                break
+            listing = "\n".join(
+                f"{r['aweme_id']}|{r['title'][:50]}|{r['author']}|{r['tags']}"
+                for r in rows
+            )
+            prompt = (
+                f"把每个视频分到以下类别之一：{cat_line}。\n"
+                "只输出一个 JSON 对象，格式 {\"视频id\": \"类别\", ...}，不要输出任何其他文字。\n"
+                "视频列表（id|标题|作者|标签）：\n" + listing
+            )
+            resp = llm._chat([{"role": "user", "content": prompt}], max_tokens=2000)
+            text = resp.strip()
+            if text.startswith("```"):  # 剥掉可能的 markdown 代码围栏
+                text = text.strip("`").lstrip("json").strip()
+            try:
+                mapping = _json.loads(text)
+            except Exception as e:
+                _job["error"] = f"分类 JSON 解析失败：{str(e)[:150]}"
+                return
+            for r in rows:
+                cat = mapping.get(r["aweme_id"])
+                db.set_category(r["aweme_id"], cat if cat in CATEGORIES else "生活其他")
+                done += 1
+            _job["done"], _job["total"] = done, total
+
+    _start_job(f"一键分类全部（待分类 {db.count_unclassified()}）", run)
     return {"ok": True}
 
 

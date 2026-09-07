@@ -58,6 +58,11 @@
   .toggle { font-size: 12px; color: var(--accent); cursor: pointer; margin-top: 6px; display: inline-block; }
   .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 20px 0; }
   .flag { color: var(--ok); font-size: 12px; }
+  .chip { display: inline-block; border: 1px solid var(--border); background: var(--card); color: var(--muted); border-radius: 999px; padding: 3px 12px; font-size: 12px; margin: 0 6px 6px 0; cursor: pointer; }
+  .chip:hover { border-color: var(--accent); color: var(--text); }
+  .chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .cat { color: var(--accent-2); font-size: 12px; border: 1px solid var(--accent-2); border-radius: 999px; padding: 1px 8px; margin-left: 6px; }
+  input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; vertical-align: middle; margin-right: 6px; }
 </style>
 </head>
 <body>
@@ -72,6 +77,11 @@
     <input type="text" id="q" placeholder="试试：RAG面试 / 焦虑 / 熵增 ..." onkeydown="if(event.key==='Enter')doSearch()">
     <button onclick="doSearch()">搜索</button>
     <button class="ghost" onclick="loadLibrary()">收藏库</button>
+  </div>
+  <div id="catChips" style="margin-top:10px"></div>
+  <div class="row" style="margin-top:10px; align-items:center">
+    <button id="btnSel" onclick="transcribeSelected()" disabled>转写勾选 (0)</button>
+    <span class="stat">勾选搜索结果里想转写的视频，点这里按需转写</span>
   </div>
   <div class="job" id="searchNote"></div>
   <div id="results"></div>
@@ -93,6 +103,7 @@
     <button id="btnTrAll" onclick="runJob('/api/transcribe',0,true)">一键转写全部</button>
     <button class="ghost" id="btnSum" onclick="runJob('/api/summarize',10,false)">概要 10 条</button>
     <button id="btnSumAll" onclick="runJob('/api/summarize',0,true)">一键概要全部</button>
+    <button id="btnCls" onclick="runJob('/api/classify',0,false)">一键分类全部</button>
   </div>
   <div class="barwrap" id="barwrap" style="display:none">
     <div class="bar" id="bar"></div>
@@ -121,6 +132,8 @@ async function loadStats() {
 function card(r) {
   const hasT = r.transcript && !r.transcript.startsWith("【");
   const flag = hasT ? '<span class="flag">✓ 已转写</span>' : "";
+  const cb = hasT ? "" : `<label><input type="checkbox" onchange="toggleSel('${r.aweme_id}', this.checked)">转写</label>`;
+  const cat = r.category ? `<span class="cat">${esc(r.category)}</span>` : "";
   const summary = r.summary ? `<div class="summary">${esc(r.summary)}</div>` : "";
   const tr = r.transcript && !r.transcript.startsWith("【")
     ? `<div class="transcript clamp" id="tr-${r.aweme_id}">${esc(r.transcript)}</div>
@@ -128,12 +141,40 @@ function card(r) {
     : "";
   const link = `https://www.douyin.com/video/${r.aweme_id}`;
   return `<div class="card">
-    <h3>${esc(r.title)} ${flag}</h3>
+    <h3>${cb}${esc(r.title)} ${flag}${cat}</h3>
     <div class="meta"><span>👤 ${esc(r.author)}</span><a href="${link}" target="_blank">打开视频 ↗</a></div>
     <div>${tagsOf(r.tags).map(t => `<span class="tag">#${esc(t)}</span>`).join("")}</div>
     ${summary}${tr}
   </div>`;
 }
+
+// ---------- 勾选按需转写 ----------
+const selected = new Set();
+function toggleSel(id, on) {
+  on ? selected.add(id) : selected.delete(id);
+  $("btnSel").textContent = `转写勾选 (${selected.size})`;
+  $("btnSel").disabled = selected.size === 0;
+}
+async function transcribeSelected() {
+  if (selected.size === 0) return;
+  const r = await fetch("/api/transcribe", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids: [...selected] }),
+  });
+  if (r.ok) { selected.clear(); $("btnSel").textContent = "转写勾选 (0)"; $("btnSel").disabled = true; watchJob(); }
+  else { const d = await r.json(); $("jobLine").textContent = d.detail; $("jobLine").className = "job err"; }
+}
+
+// ---------- 分类筛选 ----------
+let curCat = "";
+async function loadCategories() {
+  const data = await (await fetch("/api/categories")).json();
+  const chips = data.counts.map(c =>
+    `<span class="chip${c.category === curCat ? " on" : ""}" onclick="pickCat('${esc(c.category)}')">${esc(c.category)} ${c.n}</span>`).join("");
+  const un = data.unclassified ? `<span class="chip" style="opacity:.6" onclick="pickCat('__none__')">未分类 ${data.unclassified}</span>` : "";
+  $("catChips").innerHTML = `<span class="chip${curCat === "" ? " on" : ""}" onclick="pickCat('')">全部</span>${chips}${un}`;
+}
+function pickCat(c) { curCat = c; loadCategories(); loadLibrary(); }
 
 async function doSearch() {
   const q = $("q").value.trim();
@@ -150,9 +191,12 @@ async function doSearch() {
 
 async function loadLibrary() {
   $("results").innerHTML = '<div class="empty">加载中...</div>';
-  const data = await (await fetch("/api/videos?limit=30")).json();
-  $("results").innerHTML = data.hits.map(card).join("");
-  $("searchNote").textContent = "最近采集的 30 条";
+  const cat = curCat === "__none__" ? "__none__" : curCat;
+  const data = await (await fetch(`/api/videos?limit=30&category=${encodeURIComponent(cat)}`)).json();
+  $("results").innerHTML = data.hits.length
+    ? data.hits.map(card).join("")
+    : '<div class="empty">该分类下暂时没有视频。</div>';
+  $("searchNote").textContent = curCat === "" ? "最近采集的 30 条" : `分类「${curCat === "__none__" ? "未分类" : curCat}」前 30 条`;
 }
 
 async function doAsk() {
@@ -172,7 +216,15 @@ async function doAsk() {
 
 let polling = null;
 function setButtons(disabled) {
-  for (const id of ["btnTr", "btnTrAll", "btnSum", "btnSumAll"]) $(id).disabled = disabled;
+  for (const id of ["btnTr", "btnTrAll", "btnSum", "btnSumAll", "btnCls"]) $(id).disabled = disabled;
+}
+// 勾选转写走同一套轮询，只是入口不同
+function watchJob() {
+  setButtons(true);
+  $("barwrap").style.display = "block";
+  $("bar").style.width = "0%";
+  polling = setInterval(pollJob, 2000);
+  pollJob();
 }
 async function runJob(url, n, all) {
   try {
@@ -182,11 +234,7 @@ async function runJob(url, n, all) {
     });
     if (!r.ok) { $("jobLine").textContent = (await r.json()).detail; $("jobLine").className = "job err"; return; }
   } catch (e) { $("jobLine").textContent = "请求失败：" + e; return; }
-  setButtons(true);
-  $("barwrap").style.display = "block";
-  $("bar").style.width = "0%";
-  polling = setInterval(pollJob, 2000);
-  pollJob();
+  watchJob();
 }
 
 async function pollJob() {
@@ -205,12 +253,13 @@ async function pollJob() {
     setButtons(false);
     $("barwrap").style.display = "none";
     if (j.error) { el.className = "job err"; el.textContent = `✗ ${j.name} 失败：${j.error}`; }
-    else if (j.progress === "完成") { el.className = "job done"; el.textContent = `✓ ${j.name} 完成`; loadStats(); }
+    else if (j.progress === "完成") { el.className = "job done"; el.textContent = `✓ ${j.name} 完成`; loadStats(); loadCategories(); }
     else { el.className = "job"; el.textContent = ""; }
   }
 }
 
 loadStats();
+loadCategories();
 </script>
 </body>
 </html>

@@ -45,6 +45,8 @@ def init_db() -> None:
             conn.execute("ALTER TABLE favorites ADD COLUMN transcript TEXT")
         if "summary" not in cols:
             conn.execute("ALTER TABLE favorites ADD COLUMN summary TEXT")
+        if "category" not in cols:
+            conn.execute("ALTER TABLE favorites ADD COLUMN category TEXT")
 
         # FTS 虚表：content='favorites' 表示它不存数据，只存倒排索引，
         # 真正内容在 favorites 表里，靠触发器保持同步。
@@ -198,11 +200,23 @@ def stats() -> dict:
         }
 
 
-def list_videos(limit: int = 30, offset: int = 0) -> list[sqlite3.Row]:
-    """按采集时间倒序列出视频（收藏库页）。"""
+def list_videos(limit: int = 30, offset: int = 0, category: str | None = None) -> list[sqlite3.Row]:
+    """按采集时间倒序列出视频（收藏库页），可按分类过滤；"__none__" = 未分类。"""
     with get_conn() as conn:
+        if category == "__none__":
+            return conn.execute(
+                """SELECT aweme_id, title, tags, author, share_url, transcript, summary, category
+                   FROM favorites WHERE category IS NULL ORDER BY crawled_at DESC LIMIT ? OFFSET ?""",
+                (limit, offset),
+            ).fetchall()
+        if category:
+            return conn.execute(
+                """SELECT aweme_id, title, tags, author, share_url, transcript, summary, category
+                   FROM favorites WHERE category = ? ORDER BY crawled_at DESC LIMIT ? OFFSET ?""",
+                (category, limit, offset),
+            ).fetchall()
         return conn.execute(
-            """SELECT aweme_id, title, tags, author, share_url, transcript, summary
+            """SELECT aweme_id, title, tags, author, share_url, transcript, summary, category
                FROM favorites ORDER BY crawled_at DESC LIMIT ? OFFSET ?""",
             (limit, offset),
         ).fetchall()
@@ -215,9 +229,16 @@ def dumps_tags(tag_list: list) -> str:
 
 # ---------- 阶段二：转写与概要 ----------
 
-def get_untranscribed(limit: int) -> list[sqlite3.Row]:
-    """还没转写的视频（transcript 为 NULL），新的优先。"""
+def get_untranscribed(limit: int, ids: list[str] | None = None) -> list[sqlite3.Row]:
+    """还没转写的视频（transcript 为 NULL），新的优先；传 ids 时只查指定视频。"""
     with get_conn() as conn:
+        if ids:
+            marks = ",".join("?" * len(ids))
+            return conn.execute(
+                f"""SELECT aweme_id, title, author FROM favorites
+                    WHERE transcript IS NULL AND aweme_id IN ({marks})""",
+                ids,
+            ).fetchall()
         return conn.execute(
             """SELECT aweme_id, title, author FROM favorites
                WHERE transcript IS NULL
@@ -273,3 +294,37 @@ def count_unsummarized() -> int:
         return conn.execute(
             "SELECT COUNT(*) FROM favorites WHERE transcript IS NOT NULL AND summary IS NULL"
         ).fetchone()[0]
+
+
+# ---------- 分类 ----------
+
+def count_unclassified() -> int:
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM favorites WHERE category IS NULL"
+        ).fetchone()[0]
+
+
+def get_unclassified(limit: int) -> list[sqlite3.Row]:
+    with get_conn() as conn:
+        return conn.execute(
+            """SELECT aweme_id, title, tags, author FROM favorites
+               WHERE category IS NULL LIMIT ?""",
+            (limit,),
+        ).fetchall()
+
+
+def set_category(aweme_id: str, category: str) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE favorites SET category = ? WHERE aweme_id = ?", (category, aweme_id)
+        )
+
+
+def category_counts() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT category, COUNT(*) AS n FROM favorites
+               WHERE category IS NOT NULL GROUP BY category ORDER BY n DESC"""
+        ).fetchall()
+        return [{"category": r["category"], "n": r["n"]} for r in rows]
