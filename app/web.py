@@ -4,6 +4,7 @@
 长任务（转写/概要）用后台线程跑，前端轮询 /api/job 看进度；
 同一时刻只允许一个任务，防止 Whisper 把内存打爆。
 """
+import json
 import threading
 import time
 from pathlib import Path
@@ -232,9 +233,56 @@ def summarize(req: JobReq):
     return {"ok": True}
 
 
-# 分类固定集合：控制 LLM 输出可预期，前端筛选也按这套来
-CATEGORIES = ["AI技术", "编程开发", "软件工具", "知识学习", "商业财经", "人文哲思",
-              "科普科技", "心理成长", "小说写作", "游戏娱乐", "生活其他"]
+# 分类集合不写死：首次分类时由 LLM 根据收藏内容自动设计，存进 meta 表。
+# DEFAULT 只在 LLM 设计失败时兜底。
+DEFAULT_CATEGORIES = ["知识学习", "科技数码", "生活", "娱乐", "其他"]
+
+
+def load_categories() -> list[str]:
+    raw = db.get_meta("categories")
+    if raw:
+        try:
+            cats = json.loads(raw)
+            if isinstance(cats, list) and cats and all(isinstance(c, str) and c.strip() for c in cats):
+                return cats
+        except Exception:
+            pass
+    return []
+
+
+def propose_categories() -> list[str] | None:
+    """抽样标题/标签让 LLM 设计一套贴合当前收藏夹的分类（6~12 个 + 兜底「其他」）。"""
+    from app import llm
+
+    sample = db.sample_videos(100)
+    if not sample:
+        return None
+    listing = "\n".join(
+        f"{(r['title'] or '')[:40]}｜{r['tags'] or ''}" for r in sample
+    )
+    prompt = (
+        "以下是随机抽样的视频标题和标签。请为整理这个收藏夹设计 6~12 个内容分类：\n"
+        "类别名 2~4 个字、互斥、合起来能覆盖绝大多数内容；最后必须包含一个兜底类别「其他」。\n"
+        '只输出 JSON 数组，格式 ["类别1", "类别2", ...]，不要输出任何其他文字。\n\n' + listing
+    )
+    try:
+        text = llm._chat([{"role": "user", "content": prompt}], max_tokens=500).strip()
+        if text.startswith("```"):
+            text = text.strip("`").lstrip("json").strip()
+        cats = json.loads(text)
+        if not isinstance(cats, list):
+            return None
+        seen: list[str] = []
+        for c in cats:
+            if isinstance(c, str) and 2 <= len(c.strip()) <= 6 and c.strip() not in seen:
+                seen.append(c.strip())
+        if len(seen) < 4 or len(seen) > 14:
+            return None
+        if "其他" not in seen:
+            seen.append("其他")
+        return seen
+    except Exception:
+        return None
 
 
 @app.get("/api/categories")
@@ -246,15 +294,21 @@ def categories():
 
 @app.post("/api/classify")
 def classify(req: JobReq):
-    """用 LLM 按标题/标签/作者给视频打分类，循环处理直到没有未分类。"""
+    """LLM 自动分类：首次先按收藏内容设计分类集合，再批量归类。"""
     import json as _json
 
     def run():
         from app import llm
 
+        cats = load_categories()
         if req.all:
-            db.reset_categories()  # all=true：清空重分，按当前类别集合重新归类
-        cat_line = "、".join(CATEGORIES)
+            db.reset_categories()  # all=true：清空重分，且重新设计分类集合
+            db.del_meta("categories")
+            cats = []
+        if not cats:
+            cats = propose_categories() or list(DEFAULT_CATEGORIES)
+            db.set_meta("categories", _json.dumps(cats, ensure_ascii=False))
+        cat_line = "、".join(cats)
         total = db.count_unclassified()
         done = 0
         while not _job["cancel"]:
@@ -267,7 +321,7 @@ def classify(req: JobReq):
             )
             prompt = (
                 f"把每个视频分到以下类别之一：{cat_line}。\n"
-                "如果某个视频不属于其中任何一类（或信息太少无法判断），必须归入「生活其他」，不要自创类别。\n"
+                "如果某个视频不属于其中任何一类（或信息太少无法判断），必须归入「其他」，不要自创类别。\n"
                 "只输出一个 JSON 对象，格式 {\"视频id\": \"类别\", ...}，不要输出任何其他文字。\n"
                 "视频列表（id|标题|作者|标签）：\n" + listing
             )
@@ -282,11 +336,16 @@ def classify(req: JobReq):
                 return
             for r in rows:
                 cat = mapping.get(r["aweme_id"])
-                db.set_category(r["aweme_id"], cat if cat in CATEGORIES else "生活其他")
+                db.set_category(r["aweme_id"], cat if cat in cats else "其他")
                 done += 1
             _job["done"], _job["total"] = done, total
 
-    _start_job(f"一键分类全部（待分类 {db.count_unclassified()}）", run)
+    if req.all:
+        with db.get_conn() as conn:
+            pending = conn.execute("SELECT COUNT(*) FROM favorites").fetchone()[0]
+    else:
+        pending = db.count_unclassified()
+    _start_job(f"{'重新分类全部' if req.all else '一键分类全部'}（共 {pending} 条）", run)
     return {"ok": True}
 
 

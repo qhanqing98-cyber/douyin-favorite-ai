@@ -48,6 +48,14 @@ def init_db() -> None:
         if "category" not in cols:
             conn.execute("ALTER TABLE favorites ADD COLUMN category TEXT")
 
+        # meta 表：存键值对（目前只放自动生成的分类集合 categories）
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS meta (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        );
+        """)
+
         # FTS 虚表：content='favorites' 表示它不存数据，只存倒排索引，
         # 真正内容在 favorites 表里，靠触发器保持同步。
         # tokenize='trigram' 把文本切成 3 字符滑窗，天然支持中文子串匹配。
@@ -325,6 +333,34 @@ def reset_categories() -> None:
     """清空所有分类（换类别集合后重新分类用）。"""
     with get_conn() as conn:
         conn.execute("UPDATE favorites SET category = NULL")
+
+
+def get_meta(key: str) -> str | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+
+
+def set_meta(key: str, value: str) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO meta(key, value) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+
+
+def del_meta(key: str) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM meta WHERE key = ?", (key,))
+
+
+def sample_videos(limit: int) -> list[sqlite3.Row]:
+    """随机抽样若干条视频（标题+标签），供 LLM 设计分类集合用。"""
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT title, tags FROM favorites ORDER BY RANDOM() LIMIT ?", (limit,)
+        ).fetchall()
 
 
 def category_counts() -> list[dict]:

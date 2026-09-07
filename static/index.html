@@ -178,7 +178,7 @@
   <div class="label">🔍 搜索收藏 <span class="hint">标题 / 标签 / 作者 / 转写内容，支持整句，快捷键 /</span><span class="chev">▼</span></div>
   <div class="sec-body"><div class="sec-inner">
     <div class="row">
-      <input type="text" id="q" placeholder="试试：RAG面试 / 焦虑 / 熵增 ..." onkeydown="if(event.key==='Enter')doSearch()">
+      <input type="text" id="q" placeholder="输入关键词或整句，标题 / 标签 / 作者 / 转写内容都能搜 ..." onkeydown="if(event.key==='Enter')doSearch()">
       <button onclick="doSearch()">搜索</button>
       <button class="ghost" onclick="loadLibrary()">收藏库</button>
     </div>
@@ -196,7 +196,7 @@
   <div class="label">💬 问 AI <span class="hint">基于已转写内容回答，末尾标注来源</span><span class="chev">▼</span></div>
   <div class="sec-body"><div class="sec-inner">
     <div class="row">
-      <input type="text" id="question" placeholder="试试：RAG面试会问哪些问题？" onkeydown="if(event.key==='Enter')doAsk()">
+      <input type="text" id="question" placeholder="向 AI 提问，它会基于收藏视频的转写内容回答 ..." onkeydown="if(event.key==='Enter')doAsk()">
       <button onclick="doAsk()">提问</button>
     </div>
     <div id="answer" style="margin-top:12px"></div>
