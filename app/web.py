@@ -5,6 +5,7 @@
 同一时刻只允许一个任务，防止 Whisper 把内存打爆。
 """
 import threading
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -17,27 +18,101 @@ STATIC = Path(__file__).resolve().parent.parent / "static"
 
 app = FastAPI(title="抖音收藏知识库")
 
-# 任务状态（进程内单例；转写/概要都是单线程批处理，够用）
-_job = {"running": False, "name": "", "progress": "", "error": "", "done": 0, "total": 0}
+# 任务状态（进程内单例；转写/概要都是单线程批处理，够用）。
+# 取消是协作式的：任务循环里查 cancel 标志，在"条与条之间"安全退出；
+# 每条数据都是独立写库的，中断后重跑自动续上。
+_job = {"running": False, "name": "", "progress": "", "error": "",
+        "done": 0, "total": 0, "cancel": False, "started_at": 0.0}
+_history: list = []  # 已结束任务：{id, name, status, done, total, seconds}，最多 20 条
+_hist_seq = 0
 _lock = threading.Lock()
+
+
+def _hist_add(name: str, status: str, done: int, total: int, seconds: int) -> None:
+    global _hist_seq
+    _hist_seq += 1
+    _history.append({"id": _hist_seq, "name": name, "status": status,
+                     "done": done, "total": total, "seconds": seconds})
+    if len(_history) > 20:
+        _history.pop(0)
 
 
 def _start_job(name: str, fn) -> None:
     with _lock:
         if _job["running"]:
             raise HTTPException(409, f"已有任务在跑：{_job['name']}")
-        _job.update(running=True, name=name, progress="启动中...", error="", done=0, total=0)
+        _job.update(running=True, name=name, progress="启动中...", error="",
+                    done=0, total=0, cancel=False, started_at=time.time())
 
     def wrapper():
+        cancelled = False
         try:
             fn()
-            _job["progress"] = "完成"
+            cancelled = _job["cancel"]
+            _job["progress"] = "已取消" if cancelled else "完成"
         except Exception as e:
             _job["error"] = str(e)[:300]
         finally:
             _job["running"] = False
+            status = "失败" if _job["error"] else ("已取消" if cancelled else "完成")
+            _hist_add(_job["name"], status, _job["done"], _job["total"],
+                      round(time.time() - _job["started_at"]))
 
     threading.Thread(target=wrapper, daemon=True).start()
+
+
+@app.post("/api/cancel")
+def cancel():
+    if not _job["running"]:
+        raise HTTPException(409, "当前没有在跑的任务")
+    _job["cancel"] = True
+    _job["progress"] = "取消中（等当前这条处理完）..."
+    return {"ok": True}
+
+
+@app.delete("/api/history/{hid}")
+def delete_history(hid: int):
+    _history[:] = [h for h in _history if h["id"] != hid]
+    return {"ok": True}
+
+
+@app.delete("/api/history")
+def clear_history():
+    _history.clear()
+    return {"ok": True}
+
+
+@app.post("/api/login")
+def login_ep():
+    """打开有头浏览器等待扫码（最长 5 分钟），可在页面上取消。"""
+    from app import crawler
+
+    def run():
+        ok = crawler.login(
+            progress=lambda m: _job.__setitem__("progress", m[:60]),
+            should_stop=lambda: _job["cancel"],
+        )
+        if not ok and not _job["cancel"]:
+            _job["error"] = "等待超时，未检测到登录"
+
+    _start_job("扫码登录抖音", run)
+    return {"ok": True}
+
+
+@app.post("/api/crawl")
+def crawl_ep():
+    """打开浏览器滚动收藏夹采集入库（需已登录）。"""
+    from app import crawler
+
+    def run():
+        crawler.crawl(
+            progress=lambda m: _job.__setitem__("progress", m[:60]),
+            should_stop=lambda: _job["cancel"],
+        )
+        # 采集是"捕获条数"型任务，没有固定总量，不放比例进度条
+
+    _start_job("同步收藏夹", run)
+    return {"ok": True}
 
 
 @app.get("/")
@@ -122,7 +197,8 @@ def transcribe(req: JobReq):
             _job["done"], _job["total"] = done, t
             _job["progress"] = title[:24]
 
-        transcribe.run(limit=limit, progress=on_progress, ids=ids)
+        transcribe.run(limit=limit, progress=on_progress, ids=ids,
+                       should_stop=lambda: _job["cancel"])
 
     _start_job(name, run)
     return {"ok": True}
@@ -138,11 +214,13 @@ def summarize(req: JobReq):
     def run():
         remaining = 10**9 if req.all else req.n
         done = 0
-        while remaining > 0:
+        while remaining > 0 and not _job["cancel"]:
             rows = _db.get_unsummarized(min(50, remaining))
             if not rows:
                 break
             for row in rows:
+                if _job["cancel"]:
+                    return
                 _job["done"], _job["total"] = done, total
                 _job["progress"] = f"{row['title'][:20]}"
                 summary = llm.summarize(row["title"], row["author"], row["transcript"])
@@ -176,7 +254,7 @@ def classify(req: JobReq):
         cat_line = "、".join(CATEGORIES)
         total = db.count_unclassified()
         done = 0
-        while True:
+        while not _job["cancel"]:
             rows = db.get_unclassified(40)
             if not rows:
                 break
@@ -210,4 +288,8 @@ def classify(req: JobReq):
 
 @app.get("/api/job")
 def job():
-    return _job
+    return {
+        **_job,
+        "elapsed": round(time.time() - _job["started_at"]) if _job["running"] else 0,
+        "history": list(_history),
+    }

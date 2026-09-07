@@ -35,6 +35,14 @@
   button.ghost { background: var(--card); border: 1px solid var(--border); color: var(--text); }
   button:disabled { opacity: .5; cursor: not-allowed; }
   .label { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+  section.collapsed > *:not(.label):not(#searchNote) { display: none; }
+  .label { cursor: pointer; user-select: none; }
+  #searchNote { cursor: pointer; user-select: none; }
+  #searchNote::after { content: " ▾"; color: var(--muted); }
+  section.results-hidden #results { display: none; }
+  section.results-hidden #searchNote::after { content: " ▸"; }
+  .label::after { content: "▾"; float: right; color: var(--muted); }
+  section.collapsed .label::after { content: "▸"; }
   .job { font-size: 13px; margin-top: 10px; color: var(--muted); min-height: 18px; }
   .job.err { color: var(--warn); }
   .job.done { color: var(--ok); }
@@ -105,11 +113,18 @@
     <button id="btnSumAll" onclick="runJob('/api/summarize',0,true)">一键概要全部</button>
     <button id="btnCls" onclick="runJob('/api/classify',0,false)">一键分类全部</button>
   </div>
+  <div class="row" style="margin-top:8px">
+    <button class="ghost" id="btnLogin" onclick="runJob('/api/login',0,false)">📱 扫码登录</button>
+    <button class="ghost" id="btnCrawl" onclick="runJob('/api/crawl',0,false)">🔄 同步收藏夹</button>
+    <span class="stat">登录过期或收藏夹有更新时用</span>
+  </div>
   <div class="barwrap" id="barwrap" style="display:none">
     <div class="bar" id="bar"></div>
     <span class="bartext" id="bartext"></span>
   </div>
   <div class="job" id="jobLine"></div>
+  <button class="ghost" id="btnCancel" style="display:none" onclick="cancelJob()">✕ 取消任务</button>
+  <div id="history" style="margin-top:12px"></div>
 </section>
 
 <script>
@@ -216,7 +231,7 @@ async function doAsk() {
 
 let polling = null;
 function setButtons(disabled) {
-  for (const id of ["btnTr", "btnTrAll", "btnSum", "btnSumAll", "btnCls"]) $(id).disabled = disabled;
+  for (const id of ["btnTr", "btnTrAll", "btnSum", "btnSumAll", "btnCls", "btnLogin", "btnCrawl"]) $(id).disabled = disabled;
 }
 // 勾选转写走同一套轮询，只是入口不同
 function watchJob() {
@@ -242,7 +257,8 @@ async function pollJob() {
   const el = $("jobLine");
   if (j.running) {
     el.className = "job";
-    el.textContent = `⏳ ${j.name}：${j.progress}`;
+    el.textContent = `⏳ ${j.name}：${j.progress}（已进行 ${fmtSecs(j.elapsed)}）`;
+    $("btnCancel").style.display = "inline-block";
     if (j.total > 0) {
       const pct = Math.round(j.done / j.total * 100);
       $("bar").style.width = pct + "%";
@@ -251,15 +267,63 @@ async function pollJob() {
   } else {
     clearInterval(polling); polling = null;
     setButtons(false);
+    $("btnCancel").style.display = "none";
     $("barwrap").style.display = "none";
     if (j.error) { el.className = "job err"; el.textContent = `✗ ${j.name} 失败：${j.error}`; }
-    else if (j.progress === "完成") { el.className = "job done"; el.textContent = `✓ ${j.name} 完成`; loadStats(); loadCategories(); }
+    else if (j.progress === "完成" || j.progress === "已取消") {
+      el.className = "job done"; el.textContent = `✓ ${j.name} ${j.progress}`; loadStats(); loadCategories();
+    }
     else { el.className = "job"; el.textContent = ""; }
   }
+  renderHistory(j.history || []);
+}
+
+function fmtSecs(s) {
+  return s >= 60 ? `${Math.floor(s / 60)}分${s % 60}秒` : `${s}秒`;
+}
+function renderHistory(items) {
+  if (!items.length) { $("history").innerHTML = ""; return; }
+  const icon = { "完成": "✓", "已取消": "⊘", "失败": "✗" };
+  const color = { "完成": "var(--ok)", "已取消": "var(--muted)", "失败": "var(--warn)" };
+  const rows = items.map(h =>
+    `<div class="stat" style="padding:3px 0">
+       <b style="color:${color[h.status] || 'var(--muted)'}">${icon[h.status] || "·"} ${h.status}</b>
+       ｜${esc(h.name)}｜${h.done}/${h.total} 条｜${fmtSecs(h.seconds)}
+       <span class="toggle" onclick="delHistory(${h.id})" style="color:var(--muted)">✕</span>
+     </div>`).join("");
+  $("history").innerHTML = `<div class="label" style="margin-bottom:4px">最近任务 <span class="toggle" onclick="clearHistory()" style="float:none">清空</span></div>${rows}`;
+}
+async function delHistory(id) {
+  await fetch(`/api/history/${id}`, { method: "DELETE" });
+  renderHistory((await (await fetch("/api/job")).json()).history || []);
+}
+async function clearHistory() {
+  await fetch("/api/history", { method: "DELETE" });
+  $("history").innerHTML = "";
+}
+
+async function cancelJob() {
+  try { await fetch("/api/cancel", { method: "POST" }); } catch {}
 }
 
 loadStats();
 loadCategories();
+// 区块标题可点击收起/展开
+document.querySelectorAll(".label").forEach(l => l.onclick = () => l.parentElement.classList.toggle("collapsed"));
+// 搜索结果区的"命中 X 条"摘要行：点击只收起/展开它下面的结果列表
+$("searchNote").onclick = () => $("searchNote").parentElement.classList.toggle("results-hidden");
+// 页面刷新时若有任务正在跑，恢复轮询和按钮状态
+(async function resumeJobWatch() {
+  const j = await (await fetch("/api/job")).json();
+  if (j.running) {
+    setButtons(true);
+    $("barwrap").style.display = "block";
+    polling = setInterval(pollJob, 2000);
+    pollJob();
+  } else {
+    renderHistory(j.history || []);
+  }
+})();
 </script>
 </body>
 </html>

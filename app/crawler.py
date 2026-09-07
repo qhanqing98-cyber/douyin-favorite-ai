@@ -52,29 +52,40 @@ def _has_login_cookie(ctx: BrowserContext) -> bool:
     return bool(names & {"sessionid", "sessionid_ss"})
 
 
-def login(timeout_s: int = 300) -> bool:
+def login(timeout_s: int = 300, progress=None, should_stop=None) -> bool:
     """打开有头浏览器，轮询等待扫码；登录态自动落盘。
 
     不用 input() 阻塞——每 3 秒查一次 cookies，检测到 sessionid 即成功。
+    progress(msg): 可选，向 Web 端汇报等待状态。
+    should_stop: 可选，返回 True 时放弃等待（协作式取消）。
     返回 True 表示登录成功。
     """
+    def report(msg: str) -> None:
+        print(msg, flush=True)
+        if progress:
+            progress(msg)
+
     pw, ctx = _open_browser()
     page = ctx.pages[0] if ctx.pages else ctx.new_page()
     page.goto("https://www.douyin.com/", wait_until="domcontentloaded")
-    print("→ 若页面未自动弹出二维码，请点击右上角『登录』后扫码...", flush=True)
+    report("→ 若页面未自动弹出二维码，请点击右上角『登录』后扫码...")
     deadline = time.time() + timeout_s
     ok = False
     while time.time() < deadline:
+        if should_stop and should_stop():
+            report("收到取消信号，放弃登录。")
+            break
         if _has_login_cookie(ctx):
             ok = True
             break
+        report(f"等待扫码中...（已等 {int(time.time() - (deadline - timeout_s))} 秒）")
         time.sleep(3)
     ctx.close()
     pw.stop()
     if ok:
-        print(f"登录成功，登录态已保存到 {USER_DATA_DIR}")
-    else:
-        print("等待超时，未检测到登录。请重跑 login 再扫一次。")
+        report(f"登录成功，登录态已保存到 {USER_DATA_DIR}")
+    elif not (should_stop and should_stop()):
+        report("等待超时，未检测到登录。请重跑 login 再扫一次。")
     return ok
 
 
@@ -149,12 +160,19 @@ def export_cookies(out_path: Path | None = None) -> Path:
     return out
 
 
-def crawl(max_rounds: int = 400) -> int:
+def crawl(max_rounds: int = 400, progress=None, should_stop=None) -> int:
     """滚动收藏夹页面并拦截接口响应，把新视频入库。返回新增条数。
 
     终止条件：连续 3 轮滚动捕获量不增长 → 认为加载到底。
+    progress(msg): 可选，向 Web 端汇报采集状态。
+    should_stop: 可选，返回 True 时停止滚动，但已捕获的数据照常入库。
     """
     from app import db
+
+    def report(msg: str) -> None:
+        print(msg, flush=True)
+        if progress:
+            progress(msg)
 
     buffer: list[dict] = []      # 原始 aweme dict 暂存
     seen_ids: set[str] = set()   # 缓冲区内去重（接口分页可能有重叠）
@@ -183,27 +201,31 @@ def crawl(max_rounds: int = 400) -> int:
 
     page.goto(FAVORITE_URL, wait_until="domcontentloaded")
     time.sleep(6)  # 等个人主页渲染；过早点击会落在未挂载的元素上
-    print("→ 尝试自动点击『收藏』标签（最多 3 次）...", flush=True)
+    report("→ 尝试自动点击『收藏』标签（最多 3 次）...")
     for attempt in range(3):
+        if should_stop and should_stop():
+            break
         try:
             page.get_by_text(FAVORITES_TAB_TEXT, exact=True).first.click(timeout=5000)
-            print(f"第 {attempt + 1} 次点击完成", flush=True)
+            report(f"第 {attempt + 1} 次点击完成")
         except Exception:
-            print("自动点击失败，请在浏览器窗口里手动点开你的收藏夹...", flush=True)
+            report("自动点击失败，请在浏览器窗口里手动点开你的收藏夹...")
         # 点击后等数据：20 秒内接口回来就继续，否则重试点击
         for _ in range(10):
-            if buffer:
+            if buffer or (should_stop and should_stop()):
                 break
             time.sleep(2)
         if buffer:
             break
-    if not buffer:
-        print("→ 自动点击未拿到数据，等你手动点开收藏夹（最长 90 秒）...", flush=True)
+    if not buffer and not (should_stop and should_stop()):
+        report("→ 自动点击未拿到数据，等你手动点开收藏夹（最长 90 秒）...")
         deadline = time.time() + 90
         while time.time() < deadline and not buffer:
+            if should_stop and should_stop():
+                break
             time.sleep(2)
     if not buffer:
-        print("未捕获到收藏数据：请确认已登录、页面停在收藏夹列表，再重试。")
+        report("未捕获到收藏数据：请确认已登录、页面停在收藏夹列表，再重试。")
         ctx.close()
         pw.stop()
         return 0
@@ -211,11 +233,14 @@ def crawl(max_rounds: int = 400) -> int:
     stale_rounds = 0   # 连续无增长的轮数
     last_count = 0     # 上一轮结束时的捕获量
     for round_no in range(max_rounds):
+        if should_stop and should_stop():
+            report("收到取消信号，停止滚动，已捕获的数据照常入库。")
+            break
         _scroll_page(page)                     # JS 推滚动容器
         time.sleep(random.uniform(2.0, 3.5))   # 随机停顿，降低风控风险
-        print(f"\r第 {round_no + 1} 轮，已捕获 {len(buffer)} 条", end="", flush=True)
+        report(f"滚动第 {round_no + 1} 轮，已捕获 {len(buffer)} 条")
         if state.get("has_more") == 0 and len(buffer) > last_count:
-            print("\n接口返回 has_more=0，已到收藏夹最后一页。")
+            report("接口返回 has_more=0，已到收藏夹最后一页。")
             break
         if len(buffer) > last_count:
             last_count = len(buffer)
@@ -223,14 +248,13 @@ def crawl(max_rounds: int = 400) -> int:
         else:
             stale_rounds += 1
             if stale_rounds >= 3:
-                print("\n连续 3 轮无新数据，判定已到收藏夹底部。")
+                report("连续 3 轮无新数据，判定已到收藏夹底部。")
                 break
-    print()
 
     ctx.close()
     pw.stop()
 
     parsed = [p for p in (parse_aweme(it) for it in buffer) if p]
     inserted = db.save_favorites(parsed)
-    print(f"捕获 {len(parsed)} 条，新入库 {inserted} 条（其余为重复，已跳过）")
+    report(f"捕获 {len(parsed)} 条，新入库 {inserted} 条（其余为重复，已跳过）")
     return inserted

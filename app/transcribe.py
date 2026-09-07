@@ -95,11 +95,12 @@ def _transcribe_file(path: Path, model_size: str) -> str:
     return "".join(parts).strip()
 
 
-def run(limit: int = 10, model_size: str = "small", progress=None, ids=None) -> int:
+def run(limit: int = 10, model_size: str = "small", progress=None, ids=None, should_stop=None) -> int:
     """批量转写。返回成功写入的条数（含兜底标记的也算写入）。
 
     progress: 可选回调 progress(done, total, title)，Web 端用来更新进度条。
     ids: 可选，只转写这些 aweme_id（搜索结果勾选的按需转写）。
+    should_stop: 可选回调，返回 True 时在当前视频完成后停止（协作式取消）。
     """
     from app import crawler, db
 
@@ -112,6 +113,9 @@ def run(limit: int = 10, model_size: str = "small", progress=None, ids=None) -> 
     print(f"待转写 {total} 条", flush=True)
     ok = 0
     for i, row in enumerate(rows):
+        if should_stop and should_stop():
+            print("收到取消信号，停止转写。", flush=True)
+            break
         if i > 0:
             time.sleep(random.uniform(2, 5))  # 请求间隔，降低限流风险
         if progress:
