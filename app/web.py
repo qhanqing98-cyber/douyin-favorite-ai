@@ -18,48 +18,54 @@ from app import db
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
 app = FastAPI(title="抖音收藏知识库")
+db.init_db()
 
 # 任务状态（进程内单例；转写/概要都是单线程批处理，够用）。
 # 取消是协作式的：任务循环里查 cancel 标志，在"条与条之间"安全退出；
 # 每条数据都是独立写库的，中断后重跑自动续上。
-_job = {"running": False, "name": "", "progress": "", "error": "",
+_job = {"id": None, "running": False, "name": "", "progress": "", "error": "",
         "done": 0, "total": 0, "cancel": False, "started_at": 0.0}
-_history: list = []  # 已结束任务：{id, name, status, done, total, seconds}，最多 20 条
-_hist_seq = 0
 _lock = threading.Lock()
-
-
-def _hist_add(name: str, status: str, done: int, total: int, seconds: int) -> None:
-    global _hist_seq
-    _hist_seq += 1
-    _history.append({"id": _hist_seq, "name": name, "status": status,
-                     "done": done, "total": total, "seconds": seconds})
-    if len(_history) > 20:
-        _history.pop(0)
 
 
 def _start_job(name: str, fn) -> None:
     with _lock:
         if _job["running"]:
             raise HTTPException(409, f"已有任务在跑：{_job['name']}")
+        job_id = db.create_job(name)
         _job.update(running=True, name=name, progress="启动中...", error="",
-                    done=0, total=0, cancel=False, started_at=time.time())
+                    done=0, total=0, cancel=False, started_at=time.time(), id=job_id)
 
     def wrapper():
         cancelled = False
+        error = ""
         try:
             fn()
             cancelled = _job["cancel"]
             _job["progress"] = "已取消" if cancelled else "完成"
         except Exception as e:
-            _job["error"] = str(e)[:300]
+            error = str(e)[:300]
+            _job["error"] = error
         finally:
+            error = error or _job["error"]
+            status = "failed" if error else ("cancelled" if cancelled else "completed")
+            db.finish_job(
+                _job["id"], status=status,
+                progress="失败" if error else ("已取消" if cancelled else "完成"),
+                error=error, done=_job["done"], total=_job["total"],
+            )
             _job["running"] = False
-            status = "失败" if _job["error"] else ("已取消" if cancelled else "完成")
-            _hist_add(_job["name"], status, _job["done"], _job["total"],
-                      round(time.time() - _job["started_at"]))
 
     threading.Thread(target=wrapper, daemon=True).start()
+
+
+def _set_progress(**fields) -> None:
+    """同时更新内存状态和 SQLite，避免刷新页面时进度丢失。"""
+    with _lock:
+        _job.update(fields)
+        job_id = _job["id"]
+    if job_id is not None:
+        db.update_job(job_id, **fields)
 
 
 def _reindex_quietly() -> None:
@@ -81,18 +87,19 @@ def cancel():
         raise HTTPException(409, "当前没有在跑的任务")
     _job["cancel"] = True
     _job["progress"] = "取消中（等当前这条处理完）..."
+    db.update_job(_job["id"], cancel=1, progress=_job["progress"])
     return {"ok": True}
 
 
 @app.delete("/api/history/{hid}")
 def delete_history(hid: int):
-    _history[:] = [h for h in _history if h["id"] != hid]
+    db.delete_job(hid)
     return {"ok": True}
 
 
 @app.delete("/api/history")
 def clear_history():
-    _history.clear()
+    db.clear_jobs()
     return {"ok": True}
 
 
@@ -103,11 +110,11 @@ def login_ep():
 
     def run():
         ok = crawler.login(
-            progress=lambda m: _job.__setitem__("progress", m[:60]),
+            progress=lambda m: _set_progress(progress=m[:60]),
             should_stop=lambda: _job["cancel"],
         )
         if not ok and not _job["cancel"]:
-            _job["error"] = "等待超时，未检测到登录"
+            _set_progress(error="等待超时，未检测到登录")
 
     _start_job("扫码登录抖音", run)
     return {"ok": True}
@@ -120,7 +127,7 @@ def crawl_ep():
 
     def run():
         crawler.crawl(
-            progress=lambda m: _job.__setitem__("progress", m[:60]),
+            progress=lambda m: _set_progress(progress=m[:60]),
             should_stop=lambda: _job["cancel"],
         )
         # 采集是"捕获条数"型任务，没有固定总量，不放比例进度条
@@ -213,8 +220,7 @@ def transcribe(req: JobReq):
 
     def run():
         def on_progress(done: int, t: int, title: str):
-            _job["done"], _job["total"] = done, t
-            _job["progress"] = title[:24]
+            _set_progress(done=done, total=t, progress=title[:24])
 
         transcribe.run(limit=limit, progress=on_progress, ids=ids,
                        should_stop=lambda: _job["cancel"])
@@ -241,8 +247,7 @@ def summarize(req: JobReq):
             for row in rows:
                 if _job["cancel"]:
                     return
-                _job["done"], _job["total"] = done, total
-                _job["progress"] = f"{row['title'][:20]}"
+                _set_progress(done=done, total=total, progress=f"{row['title'][:20]}")
                 summary = llm.summarize(row["title"], row["author"], row["transcript"])
                 _db.set_summary(row["aweme_id"], summary)
                 done += 1
@@ -261,11 +266,10 @@ def reindex_ep():
         from app import indexer
 
         def on_progress(done: int, t: int, title: str):
-            _job["done"], _job["total"] = done, t
-            _job["progress"] = title[:24]
+            _set_progress(done=done, total=t, progress=title[:24])
 
         n = indexer.build(all=True, progress=on_progress)
-        _job["progress"] = f"已重建 {n} 个视频的向量索引"
+        _set_progress(progress=f"已重建 {n} 个视频的向量索引")
 
     _start_job("重建语义索引", run)
     return {"ok": True}
@@ -370,13 +374,13 @@ def classify(req: JobReq):
             try:
                 mapping = _json.loads(text)
             except Exception as e:
-                _job["error"] = f"分类 JSON 解析失败：{str(e)[:150]}"
+                _set_progress(error=f"分类 JSON 解析失败：{str(e)[:150]}")
                 return
             for r in rows:
                 cat = mapping.get(r["aweme_id"])
                 db.set_category(r["aweme_id"], cat if cat in cats else "其他")
                 done += 1
-            _job["done"], _job["total"] = done, total
+            _set_progress(done=done, total=total)
 
     if req.all:
         with db.get_conn() as conn:
@@ -389,8 +393,18 @@ def classify(req: JobReq):
 
 @app.get("/api/job")
 def job():
+    status_text = {
+        "completed": "完成",
+        "cancelled": "已取消",
+        "failed": "失败",
+        "interrupted": "已中断",
+        "running": "运行中",
+    }
     return {
         **_job,
         "elapsed": round(time.time() - _job["started_at"]) if _job["running"] else 0,
-        "history": list(_history),
+        "history": [
+            {**item, "status": status_text.get(item["status"], item["status"])}
+            for item in db.recent_jobs()
+        ],
     }

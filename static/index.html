@@ -475,7 +475,7 @@ function fmtSecs(s) {
 }
 function renderHistory(items) {
   if (!items.length) { $("history").innerHTML = ""; return; }
-  const c = { "完成": "var(--ok)", "已取消": "var(--muted)", "失败": "var(--warn)" };
+  const c = { "完成": "var(--ok)", "已取消": "var(--muted)", "失败": "var(--warn)", "已中断": "var(--warn)" };
   const rows = items.map(h =>
     `<div class="hrow"><span class="dot" style="background:${c[h.status] || "var(--muted)"}"></span>
        <b style="color:${c[h.status] || "var(--muted)"}">${esc(h.status)}</b>｜${esc(h.name)}｜${h.done}/${h.total} 条｜${fmtSecs(h.seconds)}

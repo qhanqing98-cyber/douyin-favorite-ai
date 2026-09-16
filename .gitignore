@@ -7,3 +7,4 @@ audio_cache/
 models/
 .env
 .workbuddy/
+.learnings/

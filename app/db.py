@@ -6,19 +6,33 @@
 import json
 import sqlite3
 import time
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 # 数据库固定放在项目根目录 data/ 下；__file__ 是本文件路径，
 # .parent 两次上溯到项目根，保证从任何工作目录运行都能找到同一个库。
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "favorites.db"
 
 
-def get_conn() -> sqlite3.Connection:
-    """返回一个数据库连接。row_factory 让查询结果可以用列名访问（row["title"]）。"""
+@contextmanager
+def get_conn() -> Iterator[sqlite3.Connection]:
+    """提供一个自动提交/回滚并关闭的连接。
+
+    sqlite3.Connection 自身的 with 只管理事务，不负责 close；
+    这里再包一层，避免 Windows 下数据库文件被遗留连接锁住。
+    """
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 FTS_COLUMNS = ("title", "tags", "author", "transcript")
@@ -55,6 +69,31 @@ def init_db() -> None:
             value TEXT
         );
         """)
+
+        # 后台任务状态：Web 进程重启后仍能看到历史、进度和中断原因。
+        # running 任务不可能在进程重启后继续执行，因此启动时标为 interrupted；
+        # 任务本身按条写库，用户重新发起同一操作时会从未完成项继续。
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS jobs (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,
+            status      TEXT NOT NULL,
+            progress    TEXT NOT NULL DEFAULT '',
+            error       TEXT NOT NULL DEFAULT '',
+            done        INTEGER NOT NULL DEFAULT 0,
+            total       INTEGER NOT NULL DEFAULT 0,
+            cancel      INTEGER NOT NULL DEFAULT 0,
+            started_at  REAL NOT NULL,
+            finished_at REAL,
+            updated_at  REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+        """)
+        conn.execute(
+            "UPDATE jobs SET status = 'interrupted', "
+            "error = ?, updated_at = ? WHERE status = 'running'",
+            ("服务重启，任务未完成；可重新运行", time.time()),
+        )
 
         # chunks 表：语义向量索引（indexer 写入、retriever 检索）。
         # vec 是 float32 小端字节串（512 维 ≈ 2KB/块）。语料 ≤千级，检索用
@@ -342,6 +381,87 @@ def stats() -> dict:
             "summarized": summarized,
             "db": str(DB_PATH),
         }
+
+
+# ---------- 后台任务持久化 ----------
+
+def create_job(name: str) -> int:
+    """创建一个运行中的任务，返回任务 id。"""
+    now = time.time()
+    with get_conn() as conn:
+        cur = conn.execute(
+            """INSERT INTO jobs
+               (name, status, started_at, updated_at)
+               VALUES (?, 'running', ?, ?)""",
+            (name, now, now),
+        )
+        return int(cur.lastrowid)
+
+
+def update_job(job_id: int, **fields) -> None:
+    """更新任务的可变状态字段。字段名白名单防止拼接任意 SQL 列名。"""
+    allowed = {"status", "progress", "error", "done", "total", "cancel"}
+    values = {k: v for k, v in fields.items() if k in allowed}
+    if not values:
+        return
+    values["updated_at"] = time.time()
+    assignments = ", ".join(f"{key} = ?" for key in values)
+    with get_conn() as conn:
+        conn.execute(
+            f"UPDATE jobs SET {assignments} WHERE id = ?",
+            (*values.values(), job_id),
+        )
+
+
+def finish_job(job_id: int, status: str, progress: str = "", error: str = "",
+               done: int = 0, total: int = 0) -> None:
+    """以终态写入任务，并记录结束时间。"""
+    now = time.time()
+    with get_conn() as conn:
+        conn.execute(
+            """UPDATE jobs
+               SET status = ?, progress = ?, error = ?, done = ?, total = ?,
+                   finished_at = ?, updated_at = ?
+               WHERE id = ?""",
+            (status, progress, error, done, total, now, now, job_id),
+        )
+
+
+def recent_jobs(limit: int = 20) -> list[dict]:
+    """返回最近任务，按时间正序，便于前端从旧到新展示。"""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT id, name, status, progress, error, done, total,
+                      started_at, finished_at
+               FROM jobs ORDER BY id DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    result = []
+    for row in reversed(rows):
+        end = row["finished_at"] or time.time()
+        result.append({
+            "id": row["id"],
+            "name": row["name"],
+            "status": row["status"],
+            "progress": row["progress"],
+            "error": row["error"],
+            "done": row["done"],
+            "total": row["total"],
+            "seconds": max(0, round(end - row["started_at"])),
+        })
+    return result
+
+
+def delete_job(job_id: int) -> None:
+    """删除一条任务历史，不影响收藏数据。"""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+
+
+def clear_jobs() -> None:
+    """清空任务历史，不影响收藏数据。"""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM jobs")
 
 
 def list_videos(limit: int = 30, offset: int = 0, category: str | None = None) -> list[sqlite3.Row]:
