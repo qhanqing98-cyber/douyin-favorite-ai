@@ -229,7 +229,7 @@
 </section>
 
 <section>
-  <div class="label">💬 问 AI <span class="hint">基于已转写内容回答，末尾标注来源</span><span class="chev">▼</span></div>
+  <div class="label">💬 问 AI <span class="hint">语义+关键词混合检索转写/概要，末尾标注来源</span><span class="chev">▼</span></div>
   <div class="sec-body"><div class="sec-inner">
     <div class="row">
       <input type="text" id="question" placeholder="向 AI 提问，它会基于收藏视频的转写内容回答 ..." onkeydown="if(event.key==='Enter')doAsk()">
@@ -250,6 +250,7 @@
         <button id="btnSumAll" onclick="runJob('/api/summarize',0,true)">一键概要全部</button>
         <button id="btnCls" onclick="runJob('/api/classify',0,false)">一键分类全部</button>
         <button class="ghost" id="btnReCls" onclick="runJob('/api/classify',0,true)">重新分类全部</button>
+        <button class="ghost" id="btnReIdx" onclick="runJob('/api/reindex',0,false)">重建语义索引</button>
       </div>
       <div class="grp"><span class="cap">账号</span>
         <button class="ghost" id="btnLogin" onclick="runJob('/api/login',0,false)">📱 扫码登录</button>
@@ -419,7 +420,7 @@ async function doAsk() {
 // ---------- 任务执行与轮询 ----------
 let polling = null;
 function setButtons(disabled) {
-  for (const id of ["btnTr", "btnTrAll", "btnSum", "btnSumAll", "btnCls", "btnReCls", "btnLogin", "btnCrawl"]) $(id).disabled = disabled;
+  for (const id of ["btnTr", "btnTrAll", "btnSum", "btnSumAll", "btnCls", "btnReCls", "btnReIdx", "btnLogin", "btnCrawl"]) $(id).disabled = disabled;
 }
 function watchJob() {
   setButtons(true);

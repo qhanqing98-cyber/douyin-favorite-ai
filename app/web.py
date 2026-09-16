@@ -62,6 +62,19 @@ def _start_job(name: str, fn) -> None:
     threading.Thread(target=wrapper, daemon=True).start()
 
 
+def _reindex_quietly() -> None:
+    """长任务（转写/概要）收尾后静默增量更新向量索引。
+
+    失败不阻塞任务收尾——ask 前还会自动重试一次，且缺模型时会退化为纯关键词检索。
+    """
+    try:
+        from app import indexer
+
+        indexer.ensure_ready()
+    except Exception:
+        pass
+
+
 @app.post("/api/cancel")
 def cancel():
     if not _job["running"]:
@@ -142,31 +155,36 @@ class AskReq(BaseModel):
 
 @app.post("/api/ask")
 def ask(req: AskReq):
-    """检索问答：搜到带转写的命中视频 → 作为上下文喂给 LLM。"""
-    from app import llm
+    """检索问答：语义+关键词混合召回 → 命中片段作上下文喂给 LLM。"""
+    from app import llm, retriever
 
-    rows = db.search(req.question, limit=5)
-    with_transcript = [r for r in rows if r["transcript"]]
-    if not with_transcript:
+    try:  # 索引缺失/内容变更 → 自动增量构建；向量模型缺失则退化为纯关键词
+        from app import indexer
+
+        indexer.ensure_ready()
+    except Exception:
+        pass
+    try:
+        hits = retriever.hybrid_search(req.question)
+    except Exception as e:
+        return {"answer": f"检索失败：{str(e)[:200]}", "sources": []}
+    if not hits:
         return {
-            "answer": "没有带转写内容的命中视频。可以先点上方「转写一批」，"
-                      "或换个关键词试试（目前只有部分视频有转写）。",
+            "answer": "没检索到相关内容。可以先点上方「转写一批」补充可检索内容，"
+                      "或者换个说法再问（目前只有部分视频有转写/概要）。",
             "sources": [],
         }
-    contexts = [
-        {
-            "title": r["title"],
-            "author": r["author"],
-            "aweme_id": r["aweme_id"],
-            "transcript": r["transcript"],
-        }
-        for r in with_transcript
-    ]
     try:
-        answer = llm.answer(req.question, contexts)
+        answer = llm.answer(req.question, retriever.build_contexts(hits))
     except Exception as e:
         return {"answer": f"AI 调用失败：{str(e)[:200]}", "sources": []}
-    return {"answer": answer, "sources": [dict(title=c["title"], aweme_id=c["aweme_id"]) for c in contexts]}
+    return {
+        "answer": answer,
+        "sources": [
+            dict(title=h["title"], aweme_id=h["aweme_id"], matched_by=h["matched_by"])
+            for h in hits
+        ],
+    }
 
 
 class JobReq(BaseModel):
@@ -200,6 +218,7 @@ def transcribe(req: JobReq):
 
         transcribe.run(limit=limit, progress=on_progress, ids=ids,
                        should_stop=lambda: _job["cancel"])
+        _reindex_quietly()  # 新转写的内容补进向量索引
 
     _start_job(name, run)
     return {"ok": True}
@@ -228,8 +247,27 @@ def summarize(req: JobReq):
                 _db.set_summary(row["aweme_id"], summary)
                 done += 1
                 remaining -= 1
+        _reindex_quietly()  # 新概要补进向量索引
 
     _start_job(f"{'一键概要全部' if req.all else f'概要 {req.n} 条'}（待概要 {total}）", run)
+    return {"ok": True}
+
+
+@app.post("/api/reindex")
+def reindex_ep():
+    """全量重建语义向量索引（换了模型、或觉得检索不准时用）。"""
+
+    def run():
+        from app import indexer
+
+        def on_progress(done: int, t: int, title: str):
+            _job["done"], _job["total"] = done, t
+            _job["progress"] = title[:24]
+
+        n = indexer.build(all=True, progress=on_progress)
+        _job["progress"] = f"已重建 {n} 个视频的向量索引"
+
+    _start_job("重建语义索引", run)
     return {"ok": True}
 
 

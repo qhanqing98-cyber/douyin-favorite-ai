@@ -56,6 +56,22 @@ def init_db() -> None:
         );
         """)
 
+        # chunks 表：语义向量索引（indexer 写入、retriever 检索）。
+        # vec 是 float32 小端字节串（512 维 ≈ 2KB/块）。语料 ≤千级，检索用
+        # numpy 暴力内积即可，不引入 sqlite-vec（Windows 加载兼容性差、无收益）。
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS chunks (
+            id       INTEGER PRIMARY KEY,
+            aweme_id TEXT NOT NULL,
+            source   TEXT NOT NULL,
+            idx      INTEGER NOT NULL,
+            text     TEXT NOT NULL,
+            vec      BLOB NOT NULL,
+            sig      TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_chunks_aweme ON chunks(aweme_id);
+        """)
+
         # FTS 虚表：content='favorites' 表示它不存数据，只存倒排索引，
         # 真正内容在 favorites 表里，靠触发器保持同步。
         # tokenize='trigram' 把文本切成 3 字符滑窗，天然支持中文子串匹配。
@@ -190,6 +206,126 @@ def _query_terms(q: str, max_terms: int = 12) -> list[str]:
     return list(seen)
 
 
+# 问 AI 场景的停用词：这些词几乎出现在任何视频里，参与召回只会引入噪声。
+_ASK_STOPWORDS = frozenset("""
+一个 一些 什么 怎么 怎么样 如何 这个 那个 这些 那些 就是 但是 因为 所以 如果 还是 虽然 不过
+而且 然后 其实 关于 通过 进行 已经 可以 应该 可能 或者 以及 我们 你们 他们 自己 大家 现在
+时候 东西 地方 情况 方面 有点 一点 没有 是不是 为什么 这样 那样 之后 以后 之前
+哪些 哪个 哪里 多少 什么样 有什么 几个 介绍 讲讲 说过 看过 分享
+视频 抖音 收藏
+""".split())
+
+
+def ask_terms(q: str, max_terms: int = 8) -> list[str]:
+    """问答查询词：jieba 分词 + 停用词过滤（比 _query_terms 更适合整句口语提问）。"""
+    import jieba
+
+    words: list[str] = []
+    for w in jieba.cut(q):
+        w = w.strip()
+        if len(w) < 2 or w in _ASK_STOPWORDS or w in words:
+            continue
+        words.append(w)
+        if len(words) >= max_terms:
+            break
+    if not words:  # 全被过滤（例如整句都是虚词）→ 退回整句
+        words = [q.strip()]
+    return words
+
+
+def search_for_ask(query: str, limit: int = 30) -> list[sqlite3.Row]:
+    """问答专用的关键词召回。相比 search() 的升级：
+    1. 只召回「有有效转写」的视频 —— 仅标题命中的、以及【音频不可用】占位行都不占名额；
+    2. 词表按长度分流：FTS5 trigram 至少要 3 个字符才建索引，中文双字词
+       （副业/赚钱/面试…）交给 FTS 会静默零命中，必须走 LIKE；
+    3. 召回顺序：长词全命中 ∩ 短词都出现（强相关）→ 长词任一命中（放宽）
+       → 短词 LIKE → 整句 LIKE 兜底；
+    4. 长词用 bm25 列权重排序：标题 8 / 标签 3 / 作者 2 / 转写 1。
+    """
+    q = query.strip()
+    if not q:
+        return []
+    if len(q) < 3:
+        terms = [q]  # 1~2 字：FTS 用不了，整串走 LIKE
+    elif len(q) <= 4:
+        # 3~4 字短查询：先当整串短语（trigram 子串匹配最精确），再叠加分词结果
+        terms = [q] + ask_terms(q)
+    else:
+        terms = ask_terms(q)
+    long_terms = [t for t in terms if len(t) >= 3]  # trigram 可检索
+    short_terms = [t for t in terms if len(t) < 3]  # 双字词 → LIKE
+
+    cols = ("f.title LIKE ? OR f.tags LIKE ? OR f.author LIKE ? "
+            "OR IFNULL(f.transcript,'') LIKE ?")
+    valid = "f.transcript IS NOT NULL AND f.transcript NOT LIKE '【%'"
+    select = "SELECT f.aweme_id, f.title, f.tags, f.author, f.share_url, f.transcript "
+    ranks = "ORDER BY bm25(favorites_fts, 8.0, 3.0, 2.0, 1.0) LIMIT ?"
+
+    def like_args(term: str) -> list[str]:
+        p = f"%{term}%"
+        return [p, p, p, p]
+
+    with get_conn() as conn:
+        if long_terms:
+            base = (select + "FROM favorites_fts t JOIN favorites f ON f.rowid = t.rowid "
+                    "WHERE ")
+            scope = "f.rowid = t.rowid AND " + valid
+            # ① 长词全命中 + 短词也都出现：最相关
+            where = "favorites_fts MATCH ?"
+            args: list = [" AND ".join(f'"{t}"' for t in long_terms)]
+            for t in short_terms:
+                where += f" AND ({cols})"
+                args += like_args(t)
+            rows = conn.execute(
+                f"{base}{where} AND {scope} {ranks}", (*args, limit)
+            ).fetchall()
+            if rows:
+                return rows
+            # ② 放宽到「任一长词命中」
+            rows = conn.execute(
+                f"{base}favorites_fts MATCH ? AND {scope} {ranks}",
+                (" OR ".join(f'"{t}"' for t in long_terms), limit),
+            ).fetchall()
+            if rows:
+                return rows
+        # ③ 短词 LIKE（或整句不足 3 字的短查询）：任一命中都算候选；
+        #    多取几倍再按「命中词数 + 标题优先」重排，避免只按 rowid 出锅
+        if short_terms:
+            where = " OR ".join(f"({cols})" for _ in short_terms)
+            args = []
+            for t in short_terms:
+                args += like_args(t)
+            rows = conn.execute(
+                f"{select}FROM favorites f WHERE ({where}) AND {valid} LIMIT ?",
+                (*args, limit * 5),
+            ).fetchall()
+            if rows:
+                return _like_rank(rows, short_terms, limit)
+        # ④ 兜底：整句 LIKE
+        return conn.execute(
+            f"{select}FROM favorites f WHERE ({cols}) AND {valid} LIMIT ?",
+            (*like_args(q), limit),
+        ).fetchall()
+
+
+def _like_rank(rows: list[sqlite3.Row], terms: list[str], limit: int) -> list[sqlite3.Row]:
+    """LIKE 召回结果的朴素排序：标题命中(3) > 标签/作者(2) > 转写(1)，累计得分降序。"""
+    def score(r: sqlite3.Row) -> int:
+        title, tags = r["title"] or "", r["tags"] or ""
+        author, text = r["author"] or "", r["transcript"] or ""
+        s = 0
+        for t in terms:
+            if t in title:
+                s += 3
+            elif t in tags or t in author:
+                s += 2
+            elif t in text:
+                s += 1
+        return s
+
+    return sorted(rows, key=lambda r: -score(r))[:limit]
+
+
 def stats() -> dict:
     """库内概况，用于验收。"""
     with get_conn() as conn:
@@ -302,6 +438,68 @@ def count_unsummarized() -> int:
         return conn.execute(
             "SELECT COUNT(*) FROM favorites WHERE transcript IS NOT NULL AND summary IS NULL"
         ).fetchone()[0]
+
+
+# ---------- 语义向量分块（问 AI 混合检索用） ----------
+
+def all_videos() -> list[sqlite3.Row]:
+    """索引所需的全部视频字段（indexer 构建向量索引用）。"""
+    with get_conn() as conn:
+        return conn.execute(
+            """SELECT aweme_id, title, tags, author, transcript, summary
+               FROM favorites ORDER BY crawled_at DESC"""
+        ).fetchall()
+
+
+def replace_chunks(aweme_id: str, chunks: list[dict], sig: str = "") -> None:
+    """整体重写某视频的向量分块。chunks: [{source, idx, text, vec(bytes)}]。"""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM chunks WHERE aweme_id = ?", (aweme_id,))
+        conn.executemany(
+            "INSERT INTO chunks (aweme_id, source, idx, text, vec, sig) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [(aweme_id, c["source"], c["idx"], c["text"], c["vec"], sig) for c in chunks],
+        )
+
+
+def all_chunks() -> list[sqlite3.Row]:
+    """全部向量块（retriever 载入内存做暴力余弦）。"""
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT aweme_id, source, idx, text, vec FROM chunks"
+        ).fetchall()
+
+
+def count_chunks() -> int:
+    with get_conn() as conn:
+        return conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+
+
+def chunk_sigs() -> dict[str, str]:
+    """每个视频当前已建索引的内容签名（增量构建时比对内容是否变化）。"""
+    with get_conn() as conn:
+        return {
+            r[0]: r[1]
+            for r in conn.execute("SELECT aweme_id, sig FROM chunks GROUP BY aweme_id")
+        }
+
+
+def drop_chunks_not_in(aweme_ids: list[str]) -> int:
+    """删除不在给定集合里的向量块（视频被删/不再有内容时留下的孤儿块）。
+
+    返回清理掉的视频数。之所以不「整表清空再重建」，是为了让全量重建在
+    中途失败时索引仍然可用（旧块还在，下一轮会覆盖），而不是变成空的。
+    """
+    keep = set(aweme_ids)
+    with get_conn() as conn:
+        stale = [
+            r[0]
+            for r in conn.execute("SELECT DISTINCT aweme_id FROM chunks").fetchall()
+            if r[0] not in keep
+        ]
+        for aweme_id in stale:
+            conn.execute("DELETE FROM chunks WHERE aweme_id = ?", (aweme_id,))
+    return len(stale)
 
 
 # ---------- 分类 ----------

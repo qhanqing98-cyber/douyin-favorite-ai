@@ -73,20 +73,22 @@ def summarize(title: str, author: str, transcript: str) -> str:
 def answer(question: str, contexts: list[dict]) -> str:
     """检索问答：把命中的视频转写作为上下文，让模型"看着原文"回答。
 
-    contexts: [{title, author, aweme_id, transcript}]，转写各截 3000 字防爆上下文。
+    contexts: [{title, author, aweme_id, transcript, excerpt}]。
+    其中 excerpt 是检索层给出的「命中片段」（相关窗口/概要），优先使用；
+    没有 excerpt 时退回转写开头 3000 字。
     """
     blocks = []
     for i, c in enumerate(contexts, 1):
+        body = (c.get("excerpt") or "").strip() or (c["transcript"] or "")[:3000]
         blocks.append(
-            f"[来源{i}] 标题:{c['title']} 作者:{c['author']} id:{c['aweme_id']}\n"
-            f"{(c['transcript'] or '')[:3000]}"
+            f"[来源{i}] 标题:{c['title']} 作者:{c['author']} id:{c['aweme_id']}\n{body}"
         )
     system = (
-        "你是用户的抖音收藏知识库助手。根据提供的视频转写内容回答问题，"
+        "你是用户的抖音收藏知识库助手。根据提供的视频内容摘录回答问题，"
         "回答末尾用 [来源N] 标注引用了哪些视频。"
-        "如果转写内容不足以回答，直接说明，不要编造。"
+        "如果摘录内容不足以回答，直接说明，不要编造。"
     )
-    user = f"以下是相关视频的转写内容：\n\n" + "\n\n".join(blocks) + f"\n\n问题：{question}"
+    user = f"以下是相关视频的内容摘录：\n\n" + "\n\n".join(blocks) + f"\n\n问题：{question}"
     return _chat(
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
         max_tokens=2000,

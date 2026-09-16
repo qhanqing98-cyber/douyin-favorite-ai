@@ -6,3 +6,8 @@ yt-dlp>=2025.1.1
 faster-whisper>=1.0
 opencc-python-reimplemented>=0.1.7
 openai>=1.30
+# 语义向量检索（app/embedder.py）：实际由 faster-whisper 传递引入，
+# 这里显式声明，避免上游依赖变化导致缺失。
+onnxruntime>=1.17
+tokenizers>=0.15
+numpy>=1.26

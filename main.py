@@ -1,4 +1,4 @@
-"""CLI 入口：login / crawl / search / transcribe / summarize / ask / stats。
+"""CLI 入口：login / crawl / search / transcribe / summarize / ask / index / stats。
 
 用法：
     python main.py login                    # 首次：扫码登录，落盘登录态
@@ -6,7 +6,8 @@
     python main.py search 关键词            # 全文搜索（标题/标签/作者/转写）
     python main.py transcribe [N]           # 转写 N 条（默认 10，--all 全部）
     python main.py summarize [N]            # 给已转写的视频生成 AI 概要
-    python main.py ask 问题                 # 检索转写内容并让 AI 回答
+    python main.py ask 问题                 # 语义+关键词混合检索并让 AI 回答
+    python main.py index [--all]            # 构建/更新语义向量索引（ask 时自动增量）
     python main.py stats                    # 查看库内条数
 """
 import argparse
@@ -57,33 +58,46 @@ def cmd_summarize(args) -> None:
 
 
 def cmd_ask(question: str) -> None:
-    from app import db, llm
+    from app import indexer, llm, retriever
 
-    rows = db.search(question, limit=5)
-    with_transcript = [r for r in rows if "transcript" in r.keys() and r["transcript"]]
-    if not with_transcript:
-        print("没有带转写内容的命中视频，先跑 transcribe。")
+    try:  # 索引缺失/内容变更 → 自动增量构建；模型缺失则退化为纯关键词检索
+        indexer.ensure_ready()
+    except Exception as e:
+        print(f"向量索引不可用（退化为纯关键词检索）：{str(e)[:150]}")
+    hits = retriever.hybrid_search(question)
+    if not hits:
+        print("没找到相关内容（需要有转写/概要的视频），先跑 transcribe。")
         return
-    contexts = [
-        {
-            "title": r["title"],
-            "author": r["author"],
-            "aweme_id": r["aweme_id"],
-            "transcript": r["transcript"],
-        }
-        for r in with_transcript
-    ]
+    tag = {"vector": "语义", "keyword": "关键词"}
     print("引用来源：")
-    for c in contexts:
-        print(f"  【{c['title']}】")
+    for h in hits:
+        how = "+".join(tag.get(m, m) for m in h["matched_by"].split("+"))
+        print(f"  【{h['title']}】[{how}]")
     print("\n回答：")
     try:
-        print(llm.answer(question, contexts))
+        print(llm.answer(question, retriever.build_contexts(hits)))
     except Exception as e:
         print(f"调用失败: {e}")
 
 
+def cmd_index(args) -> None:
+    from app import indexer
+
+    def on_progress(done: int, t: int, title: str):
+        print(f"\r[{done + 1}/{t}] {title[:36]}", end="", flush=True)
+
+    n = indexer.build(all=args.all, progress=on_progress)
+    print(f"\n索引完成：本次处理 {n} 个视频")
+
+
 def main() -> None:
+    # Windows 控制台默认 GBK：标题/概要里的 emoji 会让 print 抛 UnicodeEncodeError，
+    # 这里统一把不可编码字符替换掉（只影响控制台输出，不影响入库数据）。
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except Exception:
+            pass
     db.init_db()
     parser = argparse.ArgumentParser(description="抖音收藏夹采集、转写与问答")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -101,8 +115,11 @@ def main() -> None:
     p_sum = sub.add_parser("summarize", help="生成 AI 概要（需 .env 配置密钥）")
     p_sum.add_argument("n", nargs="?", type=int, default=10, help="本次处理条数（默认 10）")
 
-    p_ask = sub.add_parser("ask", help="检索转写内容并 AI 问答")
+    p_ask = sub.add_parser("ask", help="语义+关键词混合检索并 AI 问答")
     p_ask.add_argument("question", help="你的问题")
+
+    p_idx = sub.add_parser("index", help="构建/更新语义向量索引（ask 时自动增量）")
+    p_idx.add_argument("--all", action="store_true", help="清空全量重建（换模型后用）")
 
     p_web = sub.add_parser("web", help="启动本地 Web 页面")
     p_web.add_argument("--port", type=int, default=8642, help="监听端口（默认 8642）")
@@ -122,6 +139,8 @@ def main() -> None:
         cmd_summarize(args)
     elif args.cmd == "ask":
         cmd_ask(args.question)
+    elif args.cmd == "index":
+        cmd_index(args)
     elif args.cmd == "web":
         import uvicorn
 

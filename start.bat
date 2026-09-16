@@ -18,7 +18,7 @@ if errorlevel 1 (
 
 rem -- 2. Create venv if missing --
 if not exist ".venv\Scripts\python.exe" (
-    echo [1/4] Creating virtual environment...
+    echo [1/5] Creating virtual environment...
     python -m venv .venv
     if errorlevel 1 (
         echo [ERROR] Failed to create venv.
@@ -28,7 +28,7 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 rem -- 3. Install dependencies (Tsinghua mirror, fast in CN) --
-echo [2/4] Installing dependencies...
+echo [2/5] Installing dependencies...
 ".venv\Scripts\python.exe" -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple --quiet
 if errorlevel 1 (
     echo [ERROR] pip install failed. Check your network and retry.
@@ -42,13 +42,22 @@ set PLAYWRIGHT_DOWNLOAD_HOST=https://registry.npmmirror.com/-/binary/playwright
 
 rem -- 3. Whisper model (~461 MB, one-time, saved into models/) --
 if exist "models\faster-whisper-small\model.bin" (
-    echo [3/4] Whisper model already downloaded, skip.
+    echo [3/5] Whisper model already downloaded, skip.
 ) else (
-    echo [3/4] Pre-downloading Whisper model. Details and progress below...
+    echo [3/5] Pre-downloading Whisper model. Details and progress below...
     ".venv\Scripts\python.exe" "scripts\download_model.py" small
 )
 
-rem -- 4. .env from template --
+rem -- 4. BGE embedding model (~120 MB, one-time, for AI Q&A semantic search) --
+rem     Missing it is not fatal: Q&A falls back to keyword-only retrieval.
+if exist "models\bge-small-zh-v1.5\onnx\model_quantized.onnx" (
+    echo [4/5] Embedding model already downloaded, skip.
+) else (
+    echo [4/5] Pre-downloading BGE embedding model. Details and progress below...
+    ".venv\Scripts\python.exe" "scripts\download_model.py" bge
+)
+
+rem -- 5. .env from template --
 if not exist ".env" (
     copy .env.example .env >nul
     echo.
@@ -59,8 +68,8 @@ if not exist ".env" (
     echo.
 )
 
-rem -- 5. Launch --
-echo [4/4] Starting web UI at http://127.0.0.1:8642 ...
+rem -- 6. Launch --
+echo [5/5] Starting web UI at http://127.0.0.1:8642 ...
 echo First time? Click "Scan QR to Login" then "Sync Favorites" in the page.
 start "" cmd /c "timeout /t 3 >nul & start http://127.0.0.1:8642"
 ".venv\Scripts\python.exe" main.py web --port 8642
