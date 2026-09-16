@@ -215,10 +215,17 @@ class ToolRegistry:
     def schemas(self) -> list[dict]:
         return [spec.schema() for spec in self._specs.values()]
 
-    def call(self, name: str, raw_args: dict) -> dict:
+    def call(self, name: str, raw_args: dict, *, allow_write: bool = False) -> dict:
+        """校验并调用工具；写工具必须显式传入 allow_write=True。"""
         spec = self.get(name)
         if spec is None:
             return _error("unknown_tool", f"未注册的工具：{name}")
+        if spec.side_effect == "write" and not allow_write:
+            return {
+                **_error("approval_required", f"工具 {name} 需要用户批准"),
+                "tool": name,
+                "side_effect": spec.side_effect,
+            }
         if not isinstance(raw_args, dict):
             return _error("invalid_arguments", "工具参数必须是 JSON 对象")
         try:
