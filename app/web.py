@@ -7,13 +7,15 @@
 import json
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app import db
+from app.agent.runtime import AgentResult, AgentRuntime
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
@@ -26,6 +28,8 @@ db.init_db()
 _job = {"id": None, "running": False, "name": "", "progress": "", "error": "",
         "done": 0, "total": 0, "cancel": False, "started_at": 0.0}
 _lock = threading.Lock()
+_agent_lock = threading.Lock()
+_agent_runs: dict[str, dict] = {}
 
 
 def _start_job(name: str, fn) -> None:
@@ -79,6 +83,94 @@ def _reindex_quietly() -> None:
         indexer.ensure_ready()
     except Exception:
         pass
+
+
+class AgentAskReq(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+
+
+class AgentApprovalReq(BaseModel):
+    approved: bool
+
+
+def _agent_payload(run_id: str, record: dict) -> dict:
+    with record["lock"]:
+        result = record["result"]
+        if result is None:
+            return {"run_id": run_id, "status": record["status"]}
+        return {"run_id": run_id, **result.as_dict()}
+
+
+def _run_agent(run_id: str, record: dict) -> None:
+    try:
+        result = record["execution"].advance()
+    except Exception as exc:
+        result = AgentResult(status="failed", error=str(exc)[:300])
+    with record["lock"]:
+        record["result"] = result
+        record["status"] = result.status
+
+
+@app.post("/api/agent/ask")
+def agent_ask(req: AgentAskReq):
+    """异步启动一次 Agent 研究任务，返回 run_id 供前端轮询。"""
+    run_id = uuid.uuid4().hex
+    execution = AgentRuntime().start(req.question)
+    record = {
+        "execution": execution,
+        "result": None,
+        "status": "running",
+        "lock": threading.Lock(),
+        "created_at": time.time(),
+    }
+    with _agent_lock:
+        _agent_runs[run_id] = record
+        # 本地单用户只保留最近 20 次；正在运行或等待确认的任务不清理。
+        if len(_agent_runs) > 20:
+            removable = sorted(
+                ((rid, item) for rid, item in _agent_runs.items() if item["status"] not in {"running", "waiting_approval"}),
+                key=lambda pair: pair[1]["created_at"],
+            )
+            for rid, _ in removable[: max(0, len(_agent_runs) - 20)]:
+                _agent_runs.pop(rid, None)
+    threading.Thread(target=_run_agent, args=(run_id, record), daemon=True).start()
+    return {"run_id": run_id, "status": "running"}
+
+
+@app.get("/api/agent/{run_id}")
+def agent_status(run_id: str):
+    record = _agent_runs.get(run_id)
+    if record is None:
+        raise HTTPException(404, "Agent 任务不存在或已过期")
+    return _agent_payload(run_id, record)
+
+
+@app.post("/api/agent/{run_id}/approval")
+def agent_approval(run_id: str, req: AgentApprovalReq):
+    record = _agent_runs.get(run_id)
+    if record is None:
+        raise HTTPException(404, "Agent 任务不存在或已过期")
+    with record["lock"]:
+        if record["status"] != "waiting_approval":
+            raise HTTPException(409, "当前 Agent 没有等待批准的操作")
+        result = record["execution"].approve(req.approved)
+        record["result"] = result
+        record["status"] = result.status
+    return _agent_payload(run_id, record)
+
+
+@app.post("/api/agent/{run_id}/cancel")
+def agent_cancel(run_id: str):
+    record = _agent_runs.get(run_id)
+    if record is None:
+        raise HTTPException(404, "Agent 任务不存在或已过期")
+    with record["lock"]:
+        if record["status"] in {"completed", "failed", "cancelled"}:
+            raise HTTPException(409, "Agent 任务已经结束")
+        result = record["execution"].cancel()
+        record["result"] = result
+        record["status"] = result.status
+    return _agent_payload(run_id, record)
 
 
 @app.post("/api/cancel")

@@ -146,6 +146,18 @@
   /* ---------- AI 问答 ---------- */
   .answer { font-size: 14px; line-height: 1.85; white-space: pre-wrap; color: #46586f; }
   .src { font-size: 12px; color: var(--accent); margin-top: 6px; }
+  .agent-steps { display: grid; gap: 6px; margin: 12px 0; }
+  .agent-step { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; padding: 6px 10px;
+                border-left: 2px solid rgba(74,144,217,.35); background: rgba(255,255,255,.32); }
+  .agent-step.done { color: var(--ok); border-left-color: rgba(143,175,126,.65); }
+  .agent-step.waiting { color: var(--warn); border-left-color: rgba(201,138,75,.7); }
+  .agent-step.failed { color: var(--danger); border-left-color: rgba(196,106,92,.65); }
+  .agent-approval { margin-top: 12px; padding: 14px; border: 1px solid rgba(201,138,75,.45); border-radius: 14px;
+                    background: rgba(245,217,139,.12); color: #6f5b3b; }
+  .agent-approval h3 { font-size: 14px; font-weight: 500; margin-bottom: 6px; }
+  .agent-approval p { font-size: 13px; line-height: 1.7; margin-bottom: 10px; }
+  .agent-approval .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .agent-sources { margin-top: 10px; padding-top: 8px; border-top: 1px dashed rgba(122,148,189,.28); }
   .typing { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; padding: 14px 0; }
   .dots { display: inline-flex; gap: 4px; }
   .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: bounce 1.2s infinite; }
@@ -229,12 +241,14 @@
 </section>
 
 <section>
-  <div class="label">💬 问 AI <span class="hint">语义+关键词混合检索转写/概要，末尾标注来源</span><span class="chev">▼</span></div>
+  <div class="label">🤖 Agent 研究 <span class="hint">会自主检索、读取资料；涉及转写和概要时会先征求确认</span><span class="chev">▼</span></div>
   <div class="sec-body"><div class="sec-inner">
     <div class="row">
-      <input type="text" id="question" placeholder="向 AI 提问，它会基于收藏视频的转写内容回答 ..." onkeydown="if(event.key==='Enter')doAsk()">
-      <button onclick="doAsk()">提问</button>
+      <input type="text" id="question" placeholder="告诉 Agent 你想研究什么，例如：比较我收藏的副业观点 ..." onkeydown="if(event.key==='Enter')doAsk()">
+      <button id="btnAgentAsk" onclick="doAsk()">开始研究</button>
     </div>
+    <div id="agentSteps" class="agent-steps"></div>
+    <div id="agentApproval"></div>
     <div id="answer" style="margin-top:12px"></div>
   </div></div>
 </section>
@@ -401,20 +415,109 @@ async function loadLibrary() {
   $("searchNote").textContent = curCat === "" ? "最近采集的 30 条" : `分类「${curCat === "__none__" ? "未分类" : curCat}」前 30 条`;
 }
 
+function agentToolLabel(tool) {
+  return ({
+    search_favorites: "搜索收藏",
+    search_semantic: "语义检索",
+    get_video: "读取视频",
+    transcribe_videos: "转写视频",
+    summarize_videos: "生成概要",
+    compare_videos: "准备比较材料",
+  })[tool] || tool;
+}
+
+function renderAgentSteps(steps) {
+  const statusIcon = { completed: "✓", waiting_approval: "!", failed: "×", rejected: "–" };
+  $("agentSteps").innerHTML = (steps || []).map(s => {
+    const cls = s.status === "completed" ? "done" : (s.status === "failed" || s.status === "rejected" ? "failed" : "waiting");
+    const label = s.type === "final" ? "整理最终回答" : agentToolLabel(s.tool);
+    return `<div class="agent-step ${cls}"><span>${statusIcon[s.status] || "·"}</span><span>第 ${s.step} 步：${esc(label)}</span></div>`;
+  }).join("");
+}
+
+function renderAgent(data) {
+  renderAgentSteps(data.steps || []);
+  const approval = $("agentApproval");
+  const answer = $("answer");
+  if (data.status === "running") {
+    approval.innerHTML = "";
+    answer.innerHTML = `<div class="typing"><span class="dots"><i></i><i></i><i></i></span>Agent 正在研究你的收藏…</div>`;
+    return;
+  }
+  if (data.status === "waiting_approval" && data.pending_tool) {
+    const p = data.pending_tool;
+    const ids = p.args && Array.isArray(p.args.ids) ? `，涉及 ${p.args.ids.length} 个视频` : "";
+    approval.innerHTML = `<div class="agent-approval">
+      <h3>需要你的确认</h3>
+      <p>Agent 想要${esc(agentToolLabel(p.tool))}${ids}。${esc(p.reason || "这是一个会修改本地数据的操作。")}</p>
+      <div class="actions">
+        <button onclick="approveAgent('${esc(data.run_id)}', true)">批准这项操作</button>
+        <button class="ghost" onclick="approveAgent('${esc(data.run_id)}', false)">拒绝并结束</button>
+      </div>
+    </div>`;
+    answer.innerHTML = "";
+    return;
+  }
+  approval.innerHTML = "";
+  if (data.status === "completed") {
+    const src = (data.sources || []).map(s =>
+      `<div class="src">【${esc(s.title)}】 <a href="https://www.douyin.com/video/${encodeURIComponent(s.aweme_id)}" target="_blank" rel="noopener">↗</a></div>`).join("");
+    answer.innerHTML = `<div class="card"><div class="answer">${esc(data.answer)}<div class="agent-sources">${src || "未返回可追溯来源"}</div>
+      <span class="toggle" onclick="copyText(this.closest('.card').querySelector('.answer').textContent)">复制回答</span></div></div>`;
+  } else {
+    answer.innerHTML = emptyBox(data.status === "cancelled" ? "⏹" : "⚠️", esc(data.error || "Agent 未完成任务"));
+  }
+}
+
+let agentPoll = null;
+function watchAgent(runId) {
+  clearTimeout(agentPoll);
+  agentPoll = setTimeout(async () => {
+    try {
+      const data = await (await fetch(`/api/agent/${encodeURIComponent(runId)}`)).json();
+      renderAgent(data);
+      if (data.status === "running") watchAgent(runId);
+      else { $("btnAgentAsk").disabled = false; $("question").disabled = false; }
+    } catch (e) {
+      $("answer").innerHTML = emptyBox("⚠️", `Agent 状态获取失败：${esc(String(e))}`);
+      $("btnAgentAsk").disabled = false; $("question").disabled = false;
+    }
+  }, 700);
+}
+
+async function approveAgent(runId, approved) {
+  $("agentApproval").innerHTML = `<div class="typing">正在${approved ? "执行已批准的操作" : "结束任务"}…</div>`;
+  try {
+    const r = await fetch(`/api/agent/${encodeURIComponent(runId)}/approval`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ approved }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "确认失败");
+    renderAgent(data);
+    if (data.status === "running") watchAgent(runId);
+    else { $("btnAgentAsk").disabled = false; $("question").disabled = false; }
+  } catch (e) { toast(String(e), "err"); }
+}
+
 async function doAsk() {
   const question = $("question").value.trim();
   if (!question) return;
-  $("answer").innerHTML = `<div class="typing"><span class="dots"><i></i><i></i><i></i></span>AI 正在检索已转写内容并思考…</div>`;
+  $("btnAgentAsk").disabled = true; $("question").disabled = true;
+  $("agentSteps").innerHTML = ""; $("agentApproval").innerHTML = "";
+  $("answer").innerHTML = `<div class="typing"><span class="dots"><i></i><i></i><i></i></span>Agent 正在制定研究步骤…</div>`;
   try {
-    const data = await (await fetch("/api/ask", {
+    const r = await fetch("/api/agent/ask", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question }),
-    })).json();
-    const src = (data.sources || []).map(s =>
-      `<div class="src">【${esc(s.title)}】 <a href="https://www.douyin.com/video/${s.aweme_id}" target="_blank">↗</a></div>`).join("");
-    $("answer").innerHTML = `<div class="card"><div class="answer">${esc(data.answer)}${src}
-      <span class="toggle" onclick="copyText(this.closest('.card').querySelector('.answer').textContent)">复制回答</span></div></div>`;
-  } catch (e) { $("answer").innerHTML = emptyBox("⚠️", `请求失败：${esc(String(e))}`); }
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "Agent 启动失败");
+    renderAgent(data); watchAgent(data.run_id);
+  } catch (e) {
+    $("answer").innerHTML = emptyBox("⚠️", `Agent 启动失败：${esc(String(e))}`);
+    $("btnAgentAsk").disabled = false; $("question").disabled = false;
+  }
 }
 
 // ---------- 任务执行与轮询 ----------
