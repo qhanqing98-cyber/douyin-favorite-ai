@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app import db
-from app.agent.runtime import AgentResult, AgentRuntime
+from app.agent.runtime import AgentExecution, AgentResult, AgentRuntime
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
@@ -87,18 +87,77 @@ def _reindex_quietly() -> None:
 
 class AgentAskReq(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
+    session_id: str | None = Field(default=None, max_length=80)
 
 
 class AgentApprovalReq(BaseModel):
     approved: bool
 
 
+def _persist_agent_record(run_id: str, record: dict, result: AgentResult) -> None:
+    """将内存中的执行对象、最终结果和步骤快照同步到 SQLite。"""
+    execution = record["execution"]
+    db.update_agent_run(
+        run_id,
+        status=result.status,
+        state=execution.to_state(),
+        result=result.as_dict(),
+        error=result.error or "",
+    )
+    for step in execution.steps:
+        db.add_agent_event(run_id, int(step["step"]), "step", step)
+
+
+def _checkpoint_agent(run_id: str, execution: AgentExecution) -> None:
+    """Agent 每完成一步时写入快照，避免长任务只在结束时落盘。"""
+    db.update_agent_run(
+        run_id,
+        status=execution.status,
+        state=execution.to_state(),
+        error=execution.error or "",
+    )
+    for step in execution.steps:
+        db.add_agent_event(run_id, int(step["step"]), "step", step)
+
+
+def _load_agent_record(run_id: str) -> dict | None:
+    """进程重启后从数据库恢复一次 Agent 执行。"""
+    row = db.get_agent_run(run_id)
+    if row is None:
+        return None
+    state = json.loads(row["state_json"])
+    execution = AgentExecution.from_state(AgentRuntime(), state)
+    if row["status"] == "interrupted":
+        execution.status = "running"
+        execution.error = None
+    result = AgentResult.from_dict(json.loads(row["result_json"])) if row["result_json"] else None
+    return {
+        "execution": execution,
+        "result": result,
+        "status": row["status"],
+        "session_id": row["session_id"],
+        "error": row["error"],
+        "lock": threading.Lock(),
+        "created_at": row["created_at"],
+    }
+
+
 def _agent_payload(run_id: str, record: dict) -> dict:
     with record["lock"]:
         result = record["result"]
         if result is None:
-            return {"run_id": run_id, "status": record["status"]}
-        return {"run_id": run_id, **result.as_dict()}
+            return {
+                "run_id": run_id,
+                "session_id": record.get("session_id"),
+                "status": record["status"],
+                "error": record.get("error") or record["execution"].error,
+                "steps": record["execution"].steps,
+            }
+        return {
+            "run_id": run_id,
+            "session_id": record.get("session_id"),
+            **result.as_dict(),
+        }
 
 
 def _run_agent(run_id: str, record: dict) -> None:
@@ -109,20 +168,26 @@ def _run_agent(run_id: str, record: dict) -> None:
     with record["lock"]:
         record["result"] = result
         record["status"] = result.status
+    _persist_agent_record(run_id, record, result)
 
 
 @app.post("/api/agent/ask")
 def agent_ask(req: AgentAskReq):
     """异步启动一次 Agent 研究任务，返回 run_id 供前端轮询。"""
     run_id = uuid.uuid4().hex
+    session_id = req.session_id or uuid.uuid4().hex
     execution = AgentRuntime().start(req.question)
+    db.create_agent_session(session_id, req.question[:80])
+    db.create_agent_run(run_id, session_id, req.question, execution.to_state())
     record = {
         "execution": execution,
         "result": None,
         "status": "running",
+        "session_id": session_id,
         "lock": threading.Lock(),
         "created_at": time.time(),
     }
+    execution.on_change = lambda current: _checkpoint_agent(run_id, current)
     with _agent_lock:
         _agent_runs[run_id] = record
         # 本地单用户只保留最近 20 次；正在运行或等待确认的任务不清理。
@@ -141,7 +206,11 @@ def agent_ask(req: AgentAskReq):
 def agent_status(run_id: str):
     record = _agent_runs.get(run_id)
     if record is None:
-        raise HTTPException(404, "Agent 任务不存在或已过期")
+        record = _load_agent_record(run_id)
+        if record is None:
+            raise HTTPException(404, "Agent 任务不存在或已过期")
+        with _agent_lock:
+            _agent_runs[run_id] = record
     return _agent_payload(run_id, record)
 
 
@@ -149,13 +218,48 @@ def agent_status(run_id: str):
 def agent_approval(run_id: str, req: AgentApprovalReq):
     record = _agent_runs.get(run_id)
     if record is None:
-        raise HTTPException(404, "Agent 任务不存在或已过期")
+        record = _load_agent_record(run_id)
+        if record is None:
+            raise HTTPException(404, "Agent 任务不存在或已过期")
+        with _agent_lock:
+            _agent_runs[run_id] = record
     with record["lock"]:
         if record["status"] != "waiting_approval":
             raise HTTPException(409, "当前 Agent 没有等待批准的操作")
         result = record["execution"].approve(req.approved)
         record["result"] = result
         record["status"] = result.status
+    _persist_agent_record(run_id, record, result)
+    return _agent_payload(run_id, record)
+
+
+@app.post("/api/agent/{run_id}/continue")
+def agent_continue(run_id: str):
+    """继续执行服务重启或达到步数上限后暂停的 Agent。"""
+    record = _agent_runs.get(run_id)
+    if record is None:
+        record = _load_agent_record(run_id)
+        if record is None:
+            raise HTTPException(404, "Agent 任务不存在或已过期")
+        with _agent_lock:
+            _agent_runs[run_id] = record
+    with record["lock"]:
+        if record["status"] not in {"interrupted", "paused"}:
+            raise HTTPException(409, "当前 Agent 不需要继续执行")
+        record["execution"].on_change = lambda current: _checkpoint_agent(run_id, current)
+        record["execution"].status = "running"
+        record["execution"].error = None
+        record["result"] = None
+        record["status"] = "running"
+        record["error"] = ""
+        db.update_agent_run(
+            run_id,
+            status="running",
+            state=record["execution"].to_state(),
+            clear_result=True,
+            error="",
+        )
+    threading.Thread(target=_run_agent, args=(run_id, record), daemon=True).start()
     return _agent_payload(run_id, record)
 
 
@@ -163,13 +267,18 @@ def agent_approval(run_id: str, req: AgentApprovalReq):
 def agent_cancel(run_id: str):
     record = _agent_runs.get(run_id)
     if record is None:
-        raise HTTPException(404, "Agent 任务不存在或已过期")
+        record = _load_agent_record(run_id)
+        if record is None:
+            raise HTTPException(404, "Agent 任务不存在或已过期")
+        with _agent_lock:
+            _agent_runs[run_id] = record
     with record["lock"]:
         if record["status"] in {"completed", "failed", "cancelled"}:
             raise HTTPException(409, "Agent 任务已经结束")
         result = record["execution"].cancel()
         record["result"] = result
         record["status"] = result.status
+    _persist_agent_record(run_id, record, result)
     return _agent_payload(run_id, record)
 
 

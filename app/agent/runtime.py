@@ -52,6 +52,19 @@ class AgentResult:
             "error": self.error,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "AgentResult":
+        """从 SQLite 读回的 JSON 字典重建结果对象。"""
+        return cls(
+            status=data["status"],
+            answer=data.get("answer", ""),
+            citations=list(data.get("citations", [])),
+            sources=list(data.get("sources", [])),
+            steps=list(data.get("steps", [])),
+            pending_tool=data.get("pending_tool"),
+            error=data.get("error"),
+        )
+
 
 class DecisionError(Exception):
     pass
@@ -116,8 +129,10 @@ def _system_prompt(registry: ToolRegistry) -> str:
 class AgentExecution:
     """一次可暂停/批准/继续的 Agent 执行。"""
 
-    def __init__(self, runtime: "AgentRuntime", question: str):
+    def __init__(self, runtime: "AgentRuntime", question: str,
+                 on_change: Callable[["AgentExecution"], None] | None = None):
         self.runtime = runtime
+        self.on_change = on_change
         self.question = question.strip()
         self.messages = [
             {"role": "system", "content": _system_prompt(runtime.registry)},
@@ -130,6 +145,11 @@ class AgentExecution:
         self.answer = ""
         self.error: str | None = None
         self.pending_tool: dict | None = None
+
+    def _checkpoint(self) -> None:
+        """通知外层保存当前快照；没有持久化回调时不产生额外开销。"""
+        if self.on_change:
+            self.on_change(self)
 
     def _result(self, citations: list[str] | None = None) -> AgentResult:
         return AgentResult(
@@ -152,11 +172,48 @@ class AgentExecution:
             "content": f"工具 {tool} 返回结果：\n{observation}",
         })
 
+    def to_state(self) -> dict:
+        """把下一步决策所需的全部上下文转换成可 JSON 序列化的快照。"""
+        return {
+            "question": self.question,
+            "messages": self.messages,
+            "sources": self.sources,
+            "steps": self.steps,
+            "step_no": self.step_no,
+            "status": self.status,
+            "answer": self.answer,
+            "error": self.error,
+            "pending_tool": self.pending_tool,
+        }
+
+    @classmethod
+    def from_state(cls, runtime: "AgentRuntime", state: dict) -> "AgentExecution":
+        """用持久化快照重建执行对象；运行时依赖由调用方重新注入。"""
+        execution = cls(runtime, state.get("question", ""))
+        execution.messages = list(state.get("messages", execution.messages))
+        execution.sources = list(state.get("sources", []))
+        execution.steps = list(state.get("steps", []))
+        execution.step_no = int(state.get("step_no", len(execution.steps)))
+        execution.status = state.get("status", "running")
+        execution.answer = state.get("answer", "")
+        execution.error = state.get("error")
+        execution.pending_tool = state.get("pending_tool")
+        return execution
+
+    def resume(self) -> AgentResult:
+        """清除中断标记并从快照中的下一步继续执行。"""
+        if self.status in {"completed", "failed", "cancelled"}:
+            return self._result()
+        self.status = "running"
+        self.error = None
+        return self.advance()
+
     def advance(self) -> AgentResult:
         """从当前状态继续执行，直到终态或遇到待批准写操作。"""
         if not self.question:
             self.status = "failed"
             self.error = "问题不能为空"
+            self._checkpoint()
             return self._result()
         if self.status != "running":
             return self._result()
@@ -168,6 +225,7 @@ class AgentExecution:
             except DecisionError as exc:
                 self.status = "failed"
                 self.error = str(exc)
+                self._checkpoint()
                 return self._result()
             self.messages.append({"role": "assistant", "content": raw})
 
@@ -177,6 +235,7 @@ class AgentExecution:
                 self.answer = decision.answer
                 self.status = "completed"
                 self.steps.append({"step": self.step_no, "type": "final"})
+                self._checkpoint()
                 return self._result(citations)
 
             spec = self.runtime.registry.get(decision.tool)
@@ -197,6 +256,7 @@ class AgentExecution:
                 self.status = "waiting_approval"
                 self.pending_tool = planned
                 self.steps.append({**planned, "status": "waiting_approval"})
+                self._checkpoint()
                 return self._result()
 
             result = self.runtime.registry.call(decision.tool, decision.args)
@@ -205,9 +265,11 @@ class AgentExecution:
                 "status": "completed" if result["ok"] else "failed",
             })
             self._observe(decision.tool, result)
+            self._checkpoint()
 
         self.status = "paused"
         self.error = f"达到最大步骤数 {self.runtime.max_steps}"
+        self._checkpoint()
         return self._result()
 
     def approve(self, approved: bool) -> AgentResult:
@@ -219,6 +281,7 @@ class AgentExecution:
             self.pending_tool = None
             self.status = "cancelled"
             self.error = "用户拒绝了写操作"
+            self._checkpoint()
             return self._result()
 
         pending = self.pending_tool
@@ -229,6 +292,7 @@ class AgentExecution:
         self._observe(pending["tool"], result)
         self.pending_tool = None
         self.status = "running"
+        self._checkpoint()
         return self.advance()
 
     def cancel(self) -> AgentResult:
@@ -236,6 +300,7 @@ class AgentExecution:
         self.pending_tool = None
         self.status = "cancelled"
         self.error = "用户取消了 Agent 任务"
+        self._checkpoint()
         return self._result()
 
 

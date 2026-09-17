@@ -444,6 +444,17 @@ function renderAgent(data) {
     answer.innerHTML = `<div class="typing"><span class="dots"><i></i><i></i><i></i></span>Agent 正在研究你的收藏…</div>`;
     return;
   }
+  if ((data.status === "interrupted" || data.status === "paused")) {
+    approval.innerHTML = `<div class="agent-approval">
+      <h3>研究暂时中断</h3>
+      <p>${esc(data.error || "这次研究还没有完成，可以从最近一步继续。")}</p>
+      <div class="actions">
+        <button onclick="continueAgent('${esc(data.run_id)}')">继续研究</button>
+      </div>
+    </div>`;
+    answer.innerHTML = "";
+    return;
+  }
   if (data.status === "waiting_approval" && data.pending_tool) {
     const p = data.pending_tool;
     const ids = p.args && Array.isArray(p.args.ids) ? `，涉及 ${p.args.ids.length} 个视频` : "";
@@ -485,6 +496,23 @@ function watchAgent(runId) {
   }, 700);
 }
 
+async function restoreLastAgent() {
+  const runId = localStorage.getItem("agentRunId");
+  if (!runId) return;
+  try {
+    const r = await fetch(`/api/agent/${encodeURIComponent(runId)}`);
+    if (!r.ok) throw new Error("not found");
+    const data = await r.json();
+    renderAgent(data);
+    if (data.status === "running") {
+      $("btnAgentAsk").disabled = true; $("question").disabled = true;
+      watchAgent(runId);
+    }
+  } catch (e) {
+    localStorage.removeItem("agentRunId");
+  }
+}
+
 async function approveAgent(runId, approved) {
   $("agentApproval").innerHTML = `<div class="typing">正在${approved ? "执行已批准的操作" : "结束任务"}…</div>`;
   try {
@@ -500,6 +528,21 @@ async function approveAgent(runId, approved) {
   } catch (e) { toast(String(e), "err"); }
 }
 
+async function continueAgent(runId) {
+  $("agentApproval").innerHTML = `<div class="typing">正在恢复研究上下文…</div>`;
+  try {
+    const r = await fetch(`/api/agent/${encodeURIComponent(runId)}/continue`, { method: "POST" });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "恢复失败");
+    $("btnAgentAsk").disabled = true; $("question").disabled = true;
+    renderAgent(data);
+    if (data.status === "running") watchAgent(runId);
+  } catch (e) {
+    toast(String(e), "err");
+    $("btnAgentAsk").disabled = false; $("question").disabled = false;
+  }
+}
+
 async function doAsk() {
   const question = $("question").value.trim();
   if (!question) return;
@@ -513,6 +556,7 @@ async function doAsk() {
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || "Agent 启动失败");
+    localStorage.setItem("agentRunId", data.run_id);
     renderAgent(data); watchAgent(data.run_id);
   } catch (e) {
     $("answer").innerHTML = emptyBox("⚠️", `Agent 启动失败：${esc(String(e))}`);
@@ -603,6 +647,7 @@ async function cancelJob() {
 loadStats();
 loadCategories();
 loadLibrary();
+restoreLastAgent();
 // 区块标题点击收起/展开（含平滑动画）
 document.querySelectorAll(".label").forEach(l => l.onclick = () => l.parentElement.classList.toggle("collapsed"));
 // "命中 X 条"摘要行：点击只收起/展开结果列表

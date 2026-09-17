@@ -95,6 +95,43 @@ def init_db() -> None:
             ("服务重启，任务未完成；可重新运行", time.time()),
         )
 
+        # Agent persistence: session metadata, resumable snapshots, and step events.
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS agent_sessions (
+            id          TEXT PRIMARY KEY,
+            title       TEXT NOT NULL,
+            created_at  REAL NOT NULL,
+            updated_at  REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS agent_runs (
+            id          TEXT PRIMARY KEY,
+            session_id  TEXT NOT NULL,
+            question    TEXT NOT NULL,
+            status      TEXT NOT NULL,
+            state_json  TEXT NOT NULL,
+            result_json TEXT,
+            error       TEXT NOT NULL DEFAULT '',
+            created_at  REAL NOT NULL,
+            updated_at  REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_runs_session ON agent_runs(session_id);
+        CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
+        CREATE TABLE IF NOT EXISTS agent_events (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id       TEXT NOT NULL,
+            step_no      INTEGER NOT NULL,
+            event_type   TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at   REAL NOT NULL,
+            UNIQUE(run_id, step_no, event_type)
+        );
+        """)
+        conn.execute(
+            "UPDATE agent_runs SET status = 'interrupted', "
+            "error = ?, updated_at = ? WHERE status = 'running'",
+            ("service restarted; Agent was interrupted and can be continued", time.time()),
+        )
+
         # chunks 表：语义向量索引（indexer 写入、retriever 检索）。
         # vec 是 float32 小端字节串（512 维 ≈ 2KB/块）。语料 ≤千级，检索用
         # numpy 暴力内积即可，不引入 sqlite-vec（Windows 加载兼容性差、无收益）。
@@ -462,6 +499,85 @@ def clear_jobs() -> None:
     """清空任务历史，不影响收藏数据。"""
     with get_conn() as conn:
         conn.execute("DELETE FROM jobs")
+
+
+def create_agent_session(session_id: str, title: str) -> None:
+    """创建或刷新一个 Agent 会话。"""
+    now = time.time()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO agent_sessions (id, title, created_at, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET title = ?, updated_at = ?""",
+            (session_id, title, now, now, title, now),
+        )
+
+
+def create_agent_run(run_id: str, session_id: str, question: str, state: dict) -> None:
+    """创建 Agent 运行记录，并保存初始状态快照。"""
+    now = time.time()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO agent_runs
+               (id, session_id, question, status, state_json, created_at, updated_at)
+               VALUES (?, ?, ?, 'running', ?, ?, ?)""",
+            (run_id, session_id, question, json.dumps(state, ensure_ascii=False), now, now),
+        )
+
+
+def update_agent_run(run_id: str, *, status: str | None = None,
+                     state: dict | None = None, result: dict | None = None,
+                     error: str | None = None, clear_result: bool = False) -> None:
+    """更新 Agent 运行的有限字段，并刷新更新时间。"""
+    assignments = []
+    values = []
+    if status is not None:
+        assignments.append("status = ?")
+        values.append(status)
+    if state is not None:
+        assignments.append("state_json = ?")
+        values.append(json.dumps(state, ensure_ascii=False))
+    if result is not None or clear_result:
+        assignments.append("result_json = ?")
+        values.append(json.dumps(result, ensure_ascii=False) if result is not None else None)
+    if error is not None:
+        assignments.append("error = ?")
+        values.append(error)
+    if not assignments:
+        return
+    assignments.append("updated_at = ?")
+    values.extend([time.time(), run_id])
+    with get_conn() as conn:
+        conn.execute(
+            f"UPDATE agent_runs SET {', '.join(assignments)} WHERE id = ?",
+            values,
+        )
+
+
+def get_agent_run(run_id: str) -> dict | None:
+    """读取 Agent 运行记录，并在连接关闭前转换为普通字典。"""
+    with get_conn() as conn:
+        row = conn.execute(
+            """SELECT id, session_id, question, status, state_json, result_json,
+                      error, created_at, updated_at
+               FROM agent_runs WHERE id = ?""",
+            (run_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def add_agent_event(run_id: str, step_no: int, event_type: str, payload: dict) -> None:
+    """写入步骤事件；重复写入同一步时更新最新快照。"""
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO agent_events
+               (run_id, step_no, event_type, payload_json, created_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(run_id, step_no, event_type)
+               DO UPDATE SET payload_json = excluded.payload_json,
+                             created_at = excluded.created_at""",
+            (run_id, step_no, event_type, json.dumps(payload, ensure_ascii=False), time.time()),
+        )
 
 
 def list_videos(limit: int = 30, offset: int = 0, category: str | None = None) -> list[sqlite3.Row]:
