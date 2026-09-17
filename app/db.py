@@ -508,8 +508,8 @@ def create_agent_session(session_id: str, title: str) -> None:
         conn.execute(
             """INSERT INTO agent_sessions (id, title, created_at, updated_at)
                VALUES (?, ?, ?, ?)
-               ON CONFLICT(id) DO UPDATE SET title = ?, updated_at = ?""",
-            (session_id, title, now, now, title, now),
+               ON CONFLICT(id) DO UPDATE SET updated_at = ?""",
+            (session_id, title, now, now, now),
         )
 
 
@@ -564,6 +564,54 @@ def get_agent_run(run_id: str) -> dict | None:
             (run_id,),
         ).fetchone()
     return dict(row) if row else None
+
+
+def latest_agent_run(session_id: str) -> dict | None:
+    """获取会话最近一次运行，供多轮追问继承上下文。"""
+    with get_conn() as conn:
+        row = conn.execute(
+            """SELECT id, session_id, question, status, state_json, result_json,
+                      error, created_at, updated_at
+               FROM agent_runs WHERE session_id = ?
+               ORDER BY updated_at DESC, rowid DESC LIMIT 1""",
+            (session_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def recent_agent_runs(limit: int = 20) -> list[dict]:
+    """返回 Agent 研究历史的轻量摘要，不把完整上下文暴露给前端。"""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT r.id, r.session_id, s.title, r.question, r.status, r.error,
+                      r.state_json, r.result_json, r.created_at, r.updated_at
+               FROM agent_runs AS r
+               LEFT JOIN agent_sessions AS s ON s.id = r.session_id
+               ORDER BY r.updated_at DESC, r.rowid DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    result = []
+    for row in rows:
+        try:
+            state = json.loads(row["state_json"])
+        except (TypeError, json.JSONDecodeError):
+            state = {}
+        try:
+            saved_result = json.loads(row["result_json"]) if row["result_json"] else {}
+        except (TypeError, json.JSONDecodeError):
+            saved_result = {}
+        result.append({
+            "run_id": row["id"],
+            "session_id": row["session_id"],
+            "title": row["title"] or row["question"],
+            "question": row["question"],
+            "status": row["status"],
+            "error": row["error"],
+            "answer": saved_result.get("answer", ""),
+            "step_count": len(state.get("steps", [])),
+            "updated_at": row["updated_at"],
+        })
+    return result
 
 
 def add_agent_event(run_id: str, step_no: int, event_type: str, payload: dict) -> None:

@@ -176,7 +176,22 @@ def agent_ask(req: AgentAskReq):
     """异步启动一次 Agent 研究任务，返回 run_id 供前端轮询。"""
     run_id = uuid.uuid4().hex
     session_id = req.session_id or uuid.uuid4().hex
-    execution = AgentRuntime().start(req.question)
+    latest = db.latest_agent_run(session_id) if req.session_id else None
+    if latest and latest["status"] != "completed":
+        raise HTTPException(409, "当前会话还有未完成的 Agent 任务，请先继续或结束它")
+    if latest:
+        execution = AgentExecution.from_state(AgentRuntime(), json.loads(latest["state_json"]))
+        execution.question = req.question.strip()
+        execution.messages.append({"role": "user", "content": execution.question})
+        execution.sources = []
+        execution.steps = []
+        execution.step_no = 0
+        execution.status = "running"
+        execution.answer = ""
+        execution.error = None
+        execution.pending_tool = None
+    else:
+        execution = AgentRuntime().start(req.question)
     db.create_agent_session(session_id, req.question[:80])
     db.create_agent_run(run_id, session_id, req.question, execution.to_state())
     record = {
@@ -199,7 +214,13 @@ def agent_ask(req: AgentAskReq):
             for rid, _ in removable[: max(0, len(_agent_runs) - 20)]:
                 _agent_runs.pop(rid, None)
     threading.Thread(target=_run_agent, args=(run_id, record), daemon=True).start()
-    return {"run_id": run_id, "status": "running"}
+    return {"run_id": run_id, "session_id": session_id, "status": "running"}
+
+
+@app.get("/api/agent/history")
+def agent_history(limit: int = 20):
+    """返回 Agent 历史摘要，完整上下文仍只通过 run_id 读取。"""
+    return {"items": db.recent_agent_runs(max(1, min(limit, 50)))}
 
 
 @app.get("/api/agent/{run_id}")

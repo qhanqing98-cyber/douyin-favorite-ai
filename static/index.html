@@ -158,6 +158,9 @@
   .agent-approval p { font-size: 13px; line-height: 1.7; margin-bottom: 10px; }
   .agent-approval .actions { display: flex; gap: 8px; flex-wrap: wrap; }
   .agent-sources { margin-top: 10px; padding-top: 8px; border-top: 1px dashed rgba(122,148,189,.28); }
+  .agent-history { display: grid; gap: 6px; margin-top: 14px; }
+  .agent-history-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid rgba(122,148,189,.16); border-radius: 10px; font-size: 12px; color: var(--muted); }
+  .agent-history-row button { margin-left: auto; padding: 5px 9px; font-size: 11px; }
   .typing { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; padding: 14px 0; }
   .dots { display: inline-flex; gap: 4px; }
   .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: bounce 1.2s infinite; }
@@ -250,6 +253,7 @@
     <div id="agentSteps" class="agent-steps"></div>
     <div id="agentApproval"></div>
     <div id="answer" style="margin-top:12px"></div>
+    <div id="agentHistory" class="agent-history"></div>
   </div></div>
 </section>
 
@@ -481,6 +485,42 @@ function renderAgent(data) {
 }
 
 let agentPoll = null;
+let agentSessionId = localStorage.getItem("agentSessionId") || "";
+
+function renderAgentHistory(items) {
+  const labels = { completed: "已完成", waiting_approval: "等待确认", interrupted: "已中断", paused: "已暂停", failed: "失败", cancelled: "已取消" };
+  const rows = (items || []).map(item => `<div class="agent-history-row">
+    <span>${esc(labels[item.status] || item.status)}</span>
+    <span>${esc((item.question || item.title || "").slice(0, 64))}</span>
+    <button class="ghost" onclick="openAgentHistory('${esc(item.run_id)}')">查看</button>
+  </div>`).join("");
+  $("agentHistory").innerHTML = rows ? `<div class="hint">最近研究</div>${rows}` : "";
+}
+
+async function loadAgentHistory() {
+  try {
+    const data = await (await fetch("/api/agent/history?limit=12")).json();
+    renderAgentHistory(data.items || []);
+  } catch (e) { /* 历史加载失败不影响当前研究 */ }
+}
+
+async function openAgentHistory(runId) {
+  try {
+    const r = await fetch(`/api/agent/${encodeURIComponent(runId)}`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "读取历史失败");
+    localStorage.setItem("agentRunId", runId);
+    agentSessionId = data.session_id || "";
+    renderAgent(data);
+    if (data.status === "running") {
+      $("btnAgentAsk").disabled = true; $("question").disabled = true;
+      watchAgent(runId);
+    } else {
+      $("btnAgentAsk").disabled = false; $("question").disabled = false;
+    }
+  } catch (e) { toast(String(e), "err"); }
+}
+
 function watchAgent(runId) {
   clearTimeout(agentPoll);
   agentPoll = setTimeout(async () => {
@@ -488,7 +528,7 @@ function watchAgent(runId) {
       const data = await (await fetch(`/api/agent/${encodeURIComponent(runId)}`)).json();
       renderAgent(data);
       if (data.status === "running") watchAgent(runId);
-      else { $("btnAgentAsk").disabled = false; $("question").disabled = false; }
+      else { $("btnAgentAsk").disabled = false; $("question").disabled = false; loadAgentHistory(); }
     } catch (e) {
       $("answer").innerHTML = emptyBox("⚠️", `Agent 状态获取失败：${esc(String(e))}`);
       $("btnAgentAsk").disabled = false; $("question").disabled = false;
@@ -503,6 +543,8 @@ async function restoreLastAgent() {
     const r = await fetch(`/api/agent/${encodeURIComponent(runId)}`);
     if (!r.ok) throw new Error("not found");
     const data = await r.json();
+    agentSessionId = data.session_id || agentSessionId;
+    if (agentSessionId) localStorage.setItem("agentSessionId", agentSessionId);
     renderAgent(data);
     if (data.status === "running") {
       $("btnAgentAsk").disabled = true; $("question").disabled = true;
@@ -552,11 +594,12 @@ async function doAsk() {
   try {
     const r = await fetch("/api/agent/ask", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, ...(agentSessionId ? { session_id: agentSessionId } : {}) }),
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || "Agent 启动失败");
     localStorage.setItem("agentRunId", data.run_id);
+    agentSessionId = data.session_id || "";
     renderAgent(data); watchAgent(data.run_id);
   } catch (e) {
     $("answer").innerHTML = emptyBox("⚠️", `Agent 启动失败：${esc(String(e))}`);
@@ -648,6 +691,7 @@ loadStats();
 loadCategories();
 loadLibrary();
 restoreLastAgent();
+loadAgentHistory();
 // 区块标题点击收起/展开（含平滑动画）
 document.querySelectorAll(".label").forEach(l => l.onclick = () => l.parentElement.classList.toggle("collapsed"));
 // "命中 X 条"摘要行：点击只收起/展开结果列表
