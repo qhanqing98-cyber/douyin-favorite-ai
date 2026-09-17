@@ -440,7 +440,7 @@ function renderAgentSteps(steps) {
   const statusIcon = { completed: "✓", waiting_approval: "!", failed: "×", rejected: "–" };
   $("agentSteps").innerHTML = (steps || []).map(s => {
     const cls = s.status === "completed" ? "done" : (s.status === "failed" || s.status === "rejected" ? "failed" : "waiting");
-    const label = s.type === "final" ? "整理最终回答" : agentToolLabel(s.tool);
+    const label = s.type === "final" ? "整理最终回答" : (s.type === "plan" ? "制定任务计划" : (s.type === "replan" ? "调整任务计划" : agentToolLabel(s.tool)));
     return `<div class="agent-step ${cls}"><span>${statusIcon[s.status] || "·"}</span><span>第 ${s.step} 步：${esc(label)}</span></div>`;
   }).join("");
 }
