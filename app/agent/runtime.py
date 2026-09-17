@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal
 
@@ -16,6 +17,8 @@ from .tools import TOOLS, ToolRegistry
 MAX_STEPS = 12
 MAX_MODEL_TOKENS = 2000
 MAX_OBSERVATION_CHARS = 12000
+MAX_TOOL_RETRIES = 2
+DEFAULT_TIMEOUT_SECONDS = 120.0
 
 
 class ToolCallDecision(BaseModel):
@@ -218,13 +221,24 @@ class AgentExecution:
         if self.status != "running":
             return self._result()
 
+        deadline = time.monotonic() + self.runtime.timeout_seconds
         while self.step_no < self.runtime.max_steps:
+            if time.monotonic() >= deadline:
+                self.status = "paused"
+                self.error = f"Agent 执行超过 {self.runtime.timeout_seconds:g} 秒，已暂停"
+                self._checkpoint()
+                return self._result()
             self.step_no += 1
             try:
                 decision, raw = self.runtime._next_decision(self.messages)
             except DecisionError as exc:
                 self.status = "failed"
                 self.error = str(exc)
+                self._checkpoint()
+                return self._result()
+            if time.monotonic() >= deadline:
+                self.status = "paused"
+                self.error = f"Agent 执行超过 {self.runtime.timeout_seconds:g} 秒，已暂停"
                 self._checkpoint()
                 return self._result()
             self.messages.append({"role": "assistant", "content": raw})
@@ -242,6 +256,7 @@ class AgentExecution:
             if spec is None:
                 self.status = "failed"
                 self.error = f"模型选择了未注册工具：{decision.tool}"
+                self._checkpoint()
                 return self._result()
 
             planned = {
@@ -259,10 +274,17 @@ class AgentExecution:
                 self._checkpoint()
                 return self._result()
 
-            result = self.runtime.registry.call(decision.tool, decision.args)
+            retries = 0
+            while True:
+                result = self.runtime.registry.call(decision.tool, decision.args)
+                code = (result.get("error") or {}).get("code")
+                if result.get("ok") or code != "execution_error" or retries >= self.runtime.max_tool_retries:
+                    break
+                retries += 1
             self.steps.append({
                 **planned,
                 "status": "completed" if result["ok"] else "failed",
+                "retries": retries,
             })
             self._observe(decision.tool, result)
             self._checkpoint()
@@ -308,11 +330,19 @@ class AgentRuntime:
     """可注入模型函数的最小 Agent Runtime，便于离线测试。"""
 
     def __init__(self, chat: Callable[..., str] | None = None,
-                 registry: ToolRegistry = TOOLS, max_steps: int = MAX_STEPS):
+                 registry: ToolRegistry = TOOLS, max_steps: int = MAX_STEPS,
+                 timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+                 max_tool_retries: int = MAX_TOOL_RETRIES):
         if not 1 <= max_steps <= MAX_STEPS:
             raise ValueError(f"max_steps 必须在 1 到 {MAX_STEPS} 之间")
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds 必须大于 0")
+        if not 0 <= max_tool_retries <= MAX_TOOL_RETRIES:
+            raise ValueError(f"max_tool_retries 必须在 0 到 {MAX_TOOL_RETRIES} 之间")
         self.registry = registry
         self.max_steps = max_steps
+        self.timeout_seconds = timeout_seconds
+        self.max_tool_retries = max_tool_retries
         self._chat = chat or self._default_chat
 
     @staticmethod
