@@ -379,10 +379,28 @@ class AgentExecution:
             }
             task = self._ready_task(decision.task_id)
             if self.plan and task is None:
-                self.status = "failed"
-                self.error = "工具调用对应的任务尚未满足依赖条件"
+                ready = self._ready_task()
+                task_status = ", ".join(
+                    f"{item['id']}={item.get('status', 'pending')}"
+                    for item in self.plan
+                )
+                ready_label = ready["id"] if ready else "无（需要重新规划）"
+                self.messages.append({
+                    "role": "user",
+                    "content": (
+                        f"工具调用指定的任务 {decision.task_id or '未指定'} 当前不能执行，"
+                        f"因为依赖尚未满足。当前任务状态：{task_status}。"
+                        f"当前可执行任务：{ready_label}。不要执行这次调用；"
+                        "请改为调用可执行任务，或在没有可执行路径时输出新的 plan。"
+                    ),
+                })
+                self.steps.append({
+                    **planned,
+                    "status": "rejected",
+                    "error": "任务依赖尚未满足，已要求模型重新决策",
+                })
                 self._checkpoint()
-                return self._result()
+                continue
             if task:
                 self.active_task_id = task["id"]
                 planned["task_id"] = task["id"]

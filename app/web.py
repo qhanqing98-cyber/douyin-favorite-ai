@@ -182,7 +182,7 @@ def agent_ask(req: AgentAskReq):
     run_id = uuid.uuid4().hex
     session_id = req.session_id or uuid.uuid4().hex
     latest = db.latest_agent_run(session_id) if req.session_id else None
-    if latest and latest["status"] != "completed":
+    if latest and latest["status"] not in {"completed", "failed", "cancelled"}:
         raise HTTPException(409, "当前会话还有未完成的 Agent 任务，请先继续或结束它")
     if latest:
         execution = AgentExecution.from_state(AgentRuntime(), json.loads(latest["state_json"]))

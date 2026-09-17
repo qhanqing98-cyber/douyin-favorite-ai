@@ -48,6 +48,7 @@ def test_plan_dependency() -> None:
     registry = registry_for(lambda args: {"ok": True, "data": {}, "sources": []})
     chat = scripted_chat([
         '{"type":"plan","tasks":[{"id":"collect","title":"collect","depends_on":[]},{"id":"compare","title":"compare","depends_on":["collect"]}]}',
+        '{"type":"tool_call","tool":"lookup","task_id":"compare","args":{}}',
         '{"type":"tool_call","tool":"lookup","task_id":"collect","args":{}}',
         '{"type":"tool_call","tool":"lookup","task_id":"compare","args":{}}',
         '{"type":"final","answer":"done","citations":[]}',
@@ -56,6 +57,7 @@ def test_plan_dependency() -> None:
     assert result.status == "completed"
     assert [task["status"] for task in result.plan] == ["completed", "completed"]
     assert result.steps[0]["type"] == "plan"
+    assert result.steps[1]["status"] == "rejected"
 
 
 def test_retry() -> None:
