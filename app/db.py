@@ -552,6 +552,11 @@ def update_agent_run(run_id: str, *, status: str | None = None,
             f"UPDATE agent_runs SET {', '.join(assignments)} WHERE id = ?",
             values,
         )
+        conn.execute(
+            """UPDATE agent_sessions SET updated_at = ?
+               WHERE id = (SELECT session_id FROM agent_runs WHERE id = ?)""",
+            (time.time(), run_id),
+        )
 
 
 def get_agent_run(run_id: str) -> dict | None:
@@ -612,6 +617,74 @@ def recent_agent_runs(limit: int = 20) -> list[dict]:
             "updated_at": row["updated_at"],
         })
     return result
+
+
+def recent_agent_sessions(limit: int = 20) -> list[dict]:
+    """返回会话级摘要；运行记录只作为会话内的最新状态展示。"""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT s.id, s.title, s.created_at, s.updated_at,
+                      COUNT(r.id) AS run_count,
+                      (SELECT r2.id FROM agent_runs AS r2
+                       WHERE r2.session_id = s.id
+                       ORDER BY r2.updated_at DESC, r2.rowid DESC LIMIT 1) AS latest_run_id,
+                      (SELECT r3.status FROM agent_runs AS r3
+                       WHERE r3.session_id = s.id
+                       ORDER BY r3.updated_at DESC, r3.rowid DESC LIMIT 1) AS latest_status
+               FROM agent_sessions AS s
+               LEFT JOIN agent_runs AS r ON r.session_id = s.id
+               GROUP BY s.id
+               ORDER BY s.updated_at DESC, s.rowid DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    return [
+        {
+            "session_id": row["id"],
+            "title": row["title"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "run_count": row["run_count"],
+            "latest_run_id": row["latest_run_id"],
+            "latest_status": row["latest_status"],
+        }
+        for row in rows
+    ]
+
+
+def rename_agent_session(session_id: str, title: str) -> bool:
+    """重命名会话；返回是否找到了目标会话。"""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE agent_sessions SET title = ?, updated_at = ? WHERE id = ?",
+            (title.strip(), time.time(), session_id),
+        )
+    return cur.rowcount > 0
+
+
+def delete_agent_session(session_id: str) -> list[str]:
+    """删除会话及其运行/事件；运行中的会话拒绝删除以避免后台线程写回孤儿事件。"""
+    with get_conn() as conn:
+        active = conn.execute(
+            """SELECT 1 FROM agent_runs
+               WHERE session_id = ? AND status IN ('running', 'waiting_approval')
+               LIMIT 1""",
+            (session_id,),
+        ).fetchone()
+        if active:
+            raise ValueError("会话中还有正在运行或等待确认的 Agent 任务")
+        run_ids = [
+            row[0] for row in conn.execute(
+                "SELECT id FROM agent_runs WHERE session_id = ?", (session_id,)
+            ).fetchall()
+        ]
+        conn.execute(
+            "DELETE FROM agent_events WHERE run_id IN "
+            "(SELECT id FROM agent_runs WHERE session_id = ?)",
+            (session_id,),
+        )
+        conn.execute("DELETE FROM agent_runs WHERE session_id = ?", (session_id,))
+        conn.execute("DELETE FROM agent_sessions WHERE id = ?", (session_id,))
+    return run_ids
 
 
 def add_agent_event(run_id: str, step_no: int, event_type: str, payload: dict) -> None:

@@ -94,6 +94,10 @@ class AgentApprovalReq(BaseModel):
     approved: bool
 
 
+class AgentSessionRenameReq(BaseModel):
+    title: str = Field(min_length=1, max_length=80)
+
+
 def _persist_agent_record(run_id: str, record: dict, result: AgentResult) -> None:
     """将内存中的执行对象、最终结果和步骤快照同步到 SQLite。"""
     execution = record["execution"]
@@ -224,6 +228,31 @@ def agent_ask(req: AgentAskReq):
 def agent_history(limit: int = 20):
     """返回 Agent 历史摘要，完整上下文仍只通过 run_id 读取。"""
     return {"items": db.recent_agent_runs(max(1, min(limit, 50)))}
+
+
+@app.get("/api/agent/sessions")
+def agent_sessions(limit: int = 20):
+    """返回会话列表；每个会话附带最近一次运行的摘要。"""
+    return {"items": db.recent_agent_sessions(max(1, min(limit, 50)))}
+
+
+@app.patch("/api/agent/sessions/{session_id}")
+def agent_session_rename(session_id: str, req: AgentSessionRenameReq):
+    if not db.rename_agent_session(session_id, req.title):
+        raise HTTPException(404, "会话不存在")
+    return {"ok": True, "session_id": session_id, "title": req.title.strip()}
+
+
+@app.delete("/api/agent/sessions/{session_id}")
+def agent_session_delete(session_id: str):
+    try:
+        run_ids = db.delete_agent_session(session_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    with _agent_lock:
+        for run_id in run_ids:
+            _agent_runs.pop(run_id, None)
+    return {"ok": True, "session_id": session_id}
 
 
 @app.get("/api/agent/{run_id}")

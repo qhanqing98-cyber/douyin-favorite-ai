@@ -158,9 +158,23 @@
   .agent-approval p { font-size: 13px; line-height: 1.7; margin-bottom: 10px; }
   .agent-approval .actions { display: flex; gap: 8px; flex-wrap: wrap; }
   .agent-sources { margin-top: 10px; padding-top: 8px; border-top: 1px dashed rgba(122,148,189,.28); }
-  .agent-history { display: grid; gap: 6px; margin-top: 14px; }
-  .agent-history-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid rgba(122,148,189,.16); border-radius: 10px; font-size: 12px; color: var(--muted); }
-  .agent-history-row button { margin-left: auto; padding: 5px 9px; font-size: 11px; }
+  .agent-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 18px; align-items: start; }
+  .agent-sidebar { border-right: 1px solid rgba(122,148,189,.16); padding-right: 14px; }
+  .agent-sidebar-head, .agent-session-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .agent-sidebar-head { color: #536982; font-size: 12px; letter-spacing: .5px; margin-bottom: 8px; }
+  .agent-sidebar-head button, .agent-session-head button { padding: 5px 9px; font-size: 11px; }
+  .agent-sessions { display: grid; gap: 5px; }
+  .agent-session-row { display: flex; align-items: center; gap: 6px; padding: 8px 9px; border: 1px solid transparent; border-radius: 10px; color: var(--muted); cursor: pointer; }
+  .agent-session-row:hover { background: rgba(255,255,255,.45); }
+  .agent-session-row.active { background: rgba(255,255,255,.72); border-color: rgba(122,148,189,.22); color: #536982; }
+  .agent-session-copy { min-width: 0; flex: 1; }
+  .agent-session-copy b, .agent-session-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agent-session-copy b { font-size: 12px; font-weight: 500; }
+  .agent-session-copy span { font-size: 10px; margin-top: 3px; }
+  .agent-session-row button { flex-shrink: 0; padding: 3px 6px; font-size: 10px; }
+  .agent-workspace { min-width: 0; }
+  .agent-session-head { color: #536982; font-size: 13px; margin-bottom: 10px; }
+  .agent-session-head .hint { font-size: 11px; font-weight: 400; }
   .agent-plan { display: grid; gap: 5px; margin: 10px 0; }
   .agent-plan-row { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; padding: 5px 9px; border-left: 2px solid rgba(122,148,189,.22); }
   .agent-plan-row.done { color: var(--ok); border-left-color: rgba(143,175,126,.65); }
@@ -216,6 +230,9 @@
     .statcards { margin-left: 0; width: 100%; justify-content: space-between; }
     .scard { flex: 1; }
     .badges { justify-content: flex-start; }
+    .agent-layout { grid-template-columns: 1fr; gap: 12px; }
+    .agent-sidebar { border-right: 0; border-bottom: 1px solid rgba(122,148,189,.16); padding: 0 0 10px; }
+    .agent-sessions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
 
 </style>
@@ -251,15 +268,29 @@
 <section>
   <div class="label">🤖 Agent 研究 <span class="hint">会自主检索、读取资料；涉及转写和概要时会先征求确认</span><span class="chev">▼</span></div>
   <div class="sec-body"><div class="sec-inner">
-    <div class="row">
-      <input type="text" id="question" placeholder="告诉 Agent 你想研究什么，例如：比较我收藏的副业观点 ..." onkeydown="if(event.key==='Enter')doAsk()">
-      <button id="btnAgentAsk" onclick="doAsk()">开始研究</button>
+    <div class="agent-layout">
+      <aside class="agent-sidebar">
+        <div class="agent-sidebar-head"><span>研究会话</span><button class="ghost" onclick="newAgentSession()">新建会话</button></div>
+        <div id="agentSessions" class="agent-sessions"></div>
+      </aside>
+      <div class="agent-workspace">
+        <div class="agent-session-head">
+          <span id="agentSessionTitle">新建研究</span>
+          <span>
+            <button class="ghost" onclick="renameCurrentAgentSession()">重命名</button>
+            <button class="ghost" onclick="deleteCurrentAgentSession()">删除</button>
+          </span>
+        </div>
+        <div class="row">
+          <input type="text" id="question" placeholder="告诉 Agent 你想研究什么，例如：比较我收藏的副业观点 ..." onkeydown="if(event.key==='Enter')doAsk()">
+          <button id="btnAgentAsk" onclick="doAsk()">开始研究</button>
+        </div>
+        <div id="agentPlan" class="agent-plan"></div>
+        <div id="agentSteps" class="agent-steps"></div>
+        <div id="agentApproval"></div>
+        <div id="answer" style="margin-top:12px"></div>
+      </div>
     </div>
-    <div id="agentPlan" class="agent-plan"></div>
-    <div id="agentSteps" class="agent-steps"></div>
-    <div id="agentApproval"></div>
-    <div id="answer" style="margin-top:12px"></div>
-    <div id="agentHistory" class="agent-history"></div>
   </div></div>
 </section>
 
@@ -501,53 +532,144 @@ function renderAgent(data) {
 }
 
 let agentPoll = null;
+let agentPollRunId = null;
+let agentViewToken = 0;
 let agentSessionId = localStorage.getItem("agentSessionId") || "";
+let agentSessionTitle = "新建研究";
 
-function renderAgentHistory(items) {
-  const labels = { completed: "已完成", waiting_approval: "等待确认", interrupted: "已中断", paused: "已暂停", failed: "失败", cancelled: "已取消" };
-  const rows = (items || []).map(item => `<div class="agent-history-row">
-    <span>${esc(labels[item.status] || item.status)}</span>
-    <span>${esc((item.question || item.title || "").slice(0, 64))}</span>
-    <button class="ghost" onclick="openAgentHistory('${esc(item.run_id)}')">查看</button>
+function agentStatusLabel(status) {
+  return ({ completed: "已完成", waiting_approval: "等待确认", interrupted: "已中断", paused: "已暂停", failed: "失败", cancelled: "已取消" })[status] || "暂无运行";
+}
+
+function renderAgentSessions(items) {
+  const rows = (items || []).map(item => `<div class="agent-session-row${item.session_id === agentSessionId ? " active" : ""}"
+    data-session-id="${esc(item.session_id)}" data-run-id="${esc(item.latest_run_id || "")}" data-title="${esc(item.title || "新建研究")}"
+    onclick="openAgentSession(this.dataset.sessionId, this.dataset.runId, this.dataset.title)">
+    <div class="agent-session-copy"><b>${esc(item.title || "新建研究")}</b><span>${item.run_count} 次 · ${esc(agentStatusLabel(item.latest_status))}</span></div>
+    <button class="ghost" onclick="event.stopPropagation(); deleteAgentSession(this.closest('.agent-session-row').dataset.sessionId)">删除</button>
   </div>`).join("");
-  $("agentHistory").innerHTML = rows ? `<div class="hint">最近研究</div>${rows}` : "";
+  $("agentSessions").innerHTML = rows || `<div class="hint">还没有研究会话</div>`;
+  const current = (items || []).find(item => item.session_id === agentSessionId);
+  if (current) {
+    agentSessionTitle = current.title || "新建研究";
+    $("agentSessionTitle").textContent = agentSessionTitle;
+  }
 }
 
-async function loadAgentHistory() {
+async function loadAgentSessions() {
   try {
-    const data = await (await fetch("/api/agent/history?limit=12")).json();
-    renderAgentHistory(data.items || []);
-  } catch (e) { /* 历史加载失败不影响当前研究 */ }
+    const data = await (await fetch("/api/agent/sessions?limit=20")).json();
+    renderAgentSessions(data.items || []);
+  } catch (e) { /* 会话列表失败不影响当前研究 */ }
 }
 
-async function openAgentHistory(runId) {
+async function openAgentSession(sessionId, runId, title) {
+  const viewToken = ++agentViewToken;
+  stopAgentWatch();
+  agentSessionId = sessionId;
+  agentSessionTitle = title || "新建研究";
+  localStorage.setItem("agentSessionId", sessionId);
+  localStorage.removeItem("agentRunId");
+  $("agentSessionTitle").textContent = agentSessionTitle;
+  if (!runId) { clearAgentWorkspace(); return; }
+  await openAgentRun(runId, viewToken);
+}
+
+async function openAgentRun(runId, viewToken = null) {
   try {
     const r = await fetch(`/api/agent/${encodeURIComponent(runId)}`);
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || "读取历史失败");
+    if (viewToken !== null && viewToken !== agentViewToken) return;
     localStorage.setItem("agentRunId", runId);
     agentSessionId = data.session_id || "";
+    localStorage.setItem("agentSessionId", agentSessionId);
     renderAgent(data);
     if (data.status === "running") {
       $("btnAgentAsk").disabled = true; $("question").disabled = true;
       watchAgent(runId);
     } else {
-      $("btnAgentAsk").disabled = false; $("question").disabled = false;
+      stopAgentWatch();
+      setAgentInputLocked(data.status !== "completed");
     }
   } catch (e) { toast(String(e), "err"); }
 }
 
+function setAgentInputLocked(locked) {
+  $("btnAgentAsk").disabled = locked;
+  $("question").disabled = locked;
+}
+
+function stopAgentWatch() {
+  clearTimeout(agentPoll);
+  agentPoll = null;
+  agentPollRunId = null;
+}
+
+function clearAgentWorkspace() {
+  stopAgentWatch();
+  localStorage.removeItem("agentRunId");
+  $("agentSessionTitle").textContent = agentSessionTitle;
+  $("agentPlan").innerHTML = "";
+  $("agentSteps").innerHTML = "";
+  $("agentApproval").innerHTML = "";
+  $("answer").innerHTML = "";
+  $("question").value = "";
+}
+
+function newAgentSession() {
+  agentViewToken += 1;
+  agentSessionId = "";
+  agentSessionTitle = "新建研究";
+  localStorage.removeItem("agentSessionId");
+  clearAgentWorkspace();
+  setAgentInputLocked(false);
+  $("question").focus();
+  loadAgentSessions();
+}
+
+async function renameCurrentAgentSession() {
+  if (!agentSessionId) { toast("请先选择一个会话", "err"); return; }
+  const title = prompt("请输入会话名称", agentSessionTitle);
+  if (!title || !title.trim()) return;
+  const r = await fetch(`/api/agent/sessions/${encodeURIComponent(agentSessionId)}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: title.trim() }),
+  });
+  if (!r.ok) { toast((await r.json()).detail || "重命名失败", "err"); return; }
+  agentSessionTitle = title.trim();
+  $("agentSessionTitle").textContent = agentSessionTitle;
+  loadAgentSessions();
+}
+
+async function deleteAgentSession(sessionId) {
+  if (!confirm("删除这个研究会话及其运行记录？此操作不可撤销。")) return;
+  const r = await fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+  if (!r.ok) { toast((await r.json()).detail || "删除失败", "err"); return; }
+  if (sessionId === agentSessionId) newAgentSession();
+  else loadAgentSessions();
+}
+
+function deleteCurrentAgentSession() {
+  if (!agentSessionId) { toast("当前没有可删除的会话", "err"); return; }
+  deleteAgentSession(agentSessionId);
+}
+
 function watchAgent(runId) {
   clearTimeout(agentPoll);
+  agentPollRunId = runId;
   agentPoll = setTimeout(async () => {
     try {
+      if (agentPollRunId !== runId || localStorage.getItem("agentRunId") !== runId) return;
       const data = await (await fetch(`/api/agent/${encodeURIComponent(runId)}`)).json();
+      if (agentPollRunId !== runId || localStorage.getItem("agentRunId") !== runId) return;
       renderAgent(data);
       if (data.status === "running") watchAgent(runId);
-      else { $("btnAgentAsk").disabled = false; $("question").disabled = false; loadAgentHistory(); }
+      else { stopAgentWatch(); setAgentInputLocked(data.status !== "completed"); loadAgentSessions(); }
     } catch (e) {
+      if (agentPollRunId !== runId || localStorage.getItem("agentRunId") !== runId) return;
       $("answer").innerHTML = emptyBox("⚠️", `Agent 状态获取失败：${esc(String(e))}`);
-      $("btnAgentAsk").disabled = false; $("question").disabled = false;
+      setAgentInputLocked(false);
     }
   }, 700);
 }
@@ -565,7 +687,8 @@ async function restoreLastAgent() {
     if (data.status === "running") {
       $("btnAgentAsk").disabled = true; $("question").disabled = true;
       watchAgent(runId);
-    }
+    } else setAgentInputLocked(data.status !== "completed");
+    loadAgentSessions();
   } catch (e) {
     localStorage.removeItem("agentRunId");
   }
@@ -582,7 +705,7 @@ async function approveAgent(runId, approved) {
     if (!r.ok) throw new Error(data.detail || "确认失败");
     renderAgent(data);
     if (data.status === "running") watchAgent(runId);
-    else { $("btnAgentAsk").disabled = false; $("question").disabled = false; }
+    else { stopAgentWatch(); setAgentInputLocked(data.status !== "completed"); loadAgentSessions(); }
   } catch (e) { toast(String(e), "err"); }
 }
 
@@ -604,8 +727,9 @@ async function continueAgent(runId) {
 async function doAsk() {
   const question = $("question").value.trim();
   if (!question) return;
+  const viewToken = agentViewToken;
   $("btnAgentAsk").disabled = true; $("question").disabled = true;
-  $("agentSteps").innerHTML = ""; $("agentApproval").innerHTML = "";
+  $("agentPlan").innerHTML = ""; $("agentSteps").innerHTML = ""; $("agentApproval").innerHTML = "";
   $("answer").innerHTML = `<div class="typing"><span class="dots"><i></i><i></i><i></i></span>Agent 正在制定研究步骤…</div>`;
   try {
     const r = await fetch("/api/agent/ask", {
@@ -614,8 +738,14 @@ async function doAsk() {
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || "Agent 启动失败");
+    if (viewToken !== agentViewToken) return;
     localStorage.setItem("agentRunId", data.run_id);
     agentSessionId = data.session_id || "";
+    if (agentSessionId) localStorage.setItem("agentSessionId", agentSessionId);
+    if (!agentSessionTitle || agentSessionTitle === "新建研究") {
+      agentSessionTitle = question.slice(0, 40);
+      $("agentSessionTitle").textContent = agentSessionTitle;
+    }
     renderAgent(data); watchAgent(data.run_id);
   } catch (e) {
     $("answer").innerHTML = emptyBox("⚠️", `Agent 启动失败：${esc(String(e))}`);
@@ -707,7 +837,7 @@ loadStats();
 loadCategories();
 loadLibrary();
 restoreLastAgent();
-loadAgentHistory();
+loadAgentSessions();
 // 区块标题点击收起/展开（含平滑动画）
 document.querySelectorAll(".label").forEach(l => l.onclick = () => l.parentElement.classList.toggle("collapsed"));
 // "命中 X 条"摘要行：点击只收起/展开结果列表
