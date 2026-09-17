@@ -161,6 +161,11 @@
   .agent-history { display: grid; gap: 6px; margin-top: 14px; }
   .agent-history-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid rgba(122,148,189,.16); border-radius: 10px; font-size: 12px; color: var(--muted); }
   .agent-history-row button { margin-left: auto; padding: 5px 9px; font-size: 11px; }
+  .agent-plan { display: grid; gap: 5px; margin: 10px 0; }
+  .agent-plan-row { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; padding: 5px 9px; border-left: 2px solid rgba(122,148,189,.22); }
+  .agent-plan-row.done { color: var(--ok); border-left-color: rgba(143,175,126,.65); }
+  .agent-plan-row.active { color: var(--accent); border-left-color: rgba(122,148,189,.7); }
+  .agent-plan-row.failed { color: var(--danger); border-left-color: rgba(196,106,92,.65); }
   .typing { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; padding: 14px 0; }
   .dots { display: inline-flex; gap: 4px; }
   .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: bounce 1.2s infinite; }
@@ -250,6 +255,7 @@
       <input type="text" id="question" placeholder="告诉 Agent 你想研究什么，例如：比较我收藏的副业观点 ..." onkeydown="if(event.key==='Enter')doAsk()">
       <button id="btnAgentAsk" onclick="doAsk()">开始研究</button>
     </div>
+    <div id="agentPlan" class="agent-plan"></div>
     <div id="agentSteps" class="agent-steps"></div>
     <div id="agentApproval"></div>
     <div id="answer" style="margin-top:12px"></div>
@@ -439,7 +445,17 @@ function renderAgentSteps(steps) {
   }).join("");
 }
 
+function renderAgentPlan(plan) {
+  const statusIcon = { completed: "✓", running: "→", waiting_approval: "!", failed: "×", skipped: "–", pending: "·" };
+  const rows = (plan || []).map(task => {
+    const cls = task.status === "completed" ? "done" : (task.status === "failed" ? "failed" : (task.status === "running" || task.status === "waiting_approval" ? "active" : ""));
+    return `<div class="agent-plan-row ${cls}"><span>${statusIcon[task.status] || "·"}</span><span>${esc(task.title)}${task.status === "pending" ? "（待执行）" : ""}</span></div>`;
+  }).join("");
+  $("agentPlan").innerHTML = rows ? `<div class="hint">任务计划</div>${rows}` : "";
+}
+
 function renderAgent(data) {
+  renderAgentPlan(data.plan || []);
   renderAgentSteps(data.steps || []);
   const approval = $("agentApproval");
   const answer = $("answer");

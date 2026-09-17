@@ -151,6 +151,7 @@ def _agent_payload(run_id: str, record: dict) -> dict:
                 "session_id": record.get("session_id"),
                 "status": record["status"],
                 "error": record.get("error") or record["execution"].error,
+                "plan": record["execution"].plan,
                 "steps": record["execution"].steps,
             }
         return {
@@ -185,6 +186,8 @@ def agent_ask(req: AgentAskReq):
         execution.messages.append({"role": "user", "content": execution.question})
         execution.sources = []
         execution.steps = []
+        execution.plan = []
+        execution.active_task_id = None
         execution.step_no = 0
         execution.status = "running"
         execution.answer = ""
