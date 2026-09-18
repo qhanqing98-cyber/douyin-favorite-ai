@@ -12,6 +12,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app import db
@@ -20,6 +21,7 @@ from app.agent.runtime import AgentExecution, AgentResult, AgentRuntime
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
 app = FastAPI(title="抖音收藏知识库")
+app.mount("/static", StaticFiles(directory=STATIC), name="static")
 db.init_db()
 
 # 任务状态（进程内单例；转写/概要都是单线程批处理，够用）。
@@ -153,6 +155,7 @@ def _agent_payload(run_id: str, record: dict) -> dict:
             return {
                 "run_id": run_id,
                 "session_id": record.get("session_id"),
+                "question": record["execution"].question,
                 "status": record["status"],
                 "error": record.get("error") or record["execution"].error,
                 "plan": record["execution"].plan,
@@ -161,6 +164,7 @@ def _agent_payload(run_id: str, record: dict) -> dict:
         return {
             "run_id": run_id,
             "session_id": record.get("session_id"),
+            "question": record["execution"].question,
             **result.as_dict(),
         }
 
@@ -221,7 +225,7 @@ def agent_ask(req: AgentAskReq):
             for rid, _ in removable[: max(0, len(_agent_runs) - 20)]:
                 _agent_runs.pop(rid, None)
     threading.Thread(target=_run_agent, args=(run_id, record), daemon=True).start()
-    return {"run_id": run_id, "session_id": session_id, "status": "running"}
+    return {"run_id": run_id, "session_id": session_id, "question": req.question.strip(), "status": "running"}
 
 
 @app.get("/api/agent/history")
@@ -234,6 +238,14 @@ def agent_history(limit: int = 20):
 def agent_sessions(limit: int = 20):
     """返回会话列表；每个会话附带最近一次运行的摘要。"""
     return {"items": db.recent_agent_sessions(max(1, min(limit, 50)))}
+
+
+@app.get("/api/agent/sessions/{session_id}")
+def agent_session_detail(session_id: str):
+    detail = db.get_agent_session_detail(session_id)
+    if detail is None:
+        raise HTTPException(404, "会话不存在")
+    return detail
 
 
 @app.patch("/api/agent/sessions/{session_id}")

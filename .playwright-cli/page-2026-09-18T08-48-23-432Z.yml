@@ -1,0 +1,142 @@
+- generic [ref=f1e1]:
+  - link "跳到主要内容" [ref=f1e2] [cursor=pointer]:
+    - /url: "#mainContent"
+  - generic [ref=f1e3]:
+    - complementary "应用导航" [ref=f1e4]:
+      - generic [ref=f1e5]:
+        - generic [aria-hidden] [ref=f1e6]: 浮
+        - generic [ref=f1e7]:
+          - generic [ref=f1e8]: 浮光
+          - generic [ref=f1e9]: 收藏研究台
+        - button "关闭导航" [ref=f1e85] [cursor=pointer]: ×
+      - button "新建研究" [ref=f1e10] [cursor=pointer]:
+        - generic [aria-hidden] [ref=f1e11]: ＋
+      - navigation "主要功能" [ref=f1e13]:
+        - button "Agent 研究" [ref=f1e14] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f1e15]: ✦
+        - button "收藏库" [ref=f1e17] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f1e18]: ⌕
+        - button "数据维护" [ref=f1e20] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f1e21]: ⌁
+      - generic [ref=f1e23]:
+        - generic [ref=f1e24]:
+          - generic [ref=f1e25]: 研究会话
+          - generic [ref=f1e26]: "1"
+        - generic [ref=f1e27]:
+          - generic [aria-hidden] [ref=f1e28]: ⌕
+          - searchbox "搜索研究会话" [ref=f1e29]
+        - list [ref=f1e30]:
+          - listitem [ref=f1e31] [cursor=pointer]:
+            - generic [ref=f1e32]: 怎么赚钱
+            - generic "已完成" [ref=f1e33]
+            - generic [ref=f1e34]: 为什么会焦虑
+      - generic "收藏库统计" [ref=f1e35]:
+        - generic [ref=f1e36]:
+          - strong [ref=f1e37]: "464"
+          - generic [ref=f1e38]: 收藏
+        - generic [ref=f1e39]:
+          - strong [ref=f1e40]: "36"
+          - generic [ref=f1e41]: 转写
+        - generic [ref=f1e42]:
+          - strong [ref=f1e43]: "39"
+          - generic [ref=f1e44]: 概要
+    - generic [ref=f1e45]:
+      - banner [ref=f1e86]:
+        - button "打开导航" [ref=f1e87] [cursor=pointer]: ☰
+        - generic [ref=f1e88]: 浮光 · 收藏研究台
+        - button "查看执行详情" [active] [ref=f1e89] [cursor=pointer]: ☷
+      - main [ref=f1e46]:
+        - generic [ref=f1e47]:
+          - generic [ref=f1e48]:
+            - generic [ref=f1e49]:
+              - generic [ref=f1e50]: AGENT RESEARCH
+              - heading "怎么赚钱" [level=1] [ref=f1e90]
+              - paragraph [ref=f1e52]: 2 个研究轮次 · 最近更新 9/17 19:44
+            - generic [ref=f1e53]:
+              - button "重命名" [ref=f1e54] [cursor=pointer]
+              - button "删除会话" [ref=f1e55] [cursor=pointer]
+          - generic [ref=f1e56]:
+            - region "研究对话" [ref=f1e57]:
+              - generic [ref=f1e58]:
+                - article [ref=f1e91]:
+                  - generic [ref=f1e92]:
+                    - generic [aria-hidden] [ref=f1e93]: 你
+                    - generic [ref=f1e94]: 怎么赚钱
+                  - generic [ref=f1e95]:
+                    - generic [aria-hidden] [ref=f1e96]: 浮
+                    - generic [ref=f1e97]:
+                      - text: 收藏里关于“怎么赚钱”的内容主要指向几条思路： 1. 先找需求，再匹配技能（核心方法） 来自「姜胡说」的视频：普通人赚钱只有一条路——帮别人解决问题。反常识点是：不是先有技能再找用户，而是先有需求再匹配技能。找需求有两个地方： - 去赚钱的社群偷师：看收费还人满为患的社群解决了什么问题、用户为什么愿意付钱、自己能不能解决。能解决就提供更好的方案，或去同样有需求但没被满足的地方。 - 去评论区挖金矿：案例是飞练伞厂老板欠债200万，直播一条视频火了，评论区有人留言“晚上走路怕被车撞，需要反镭射伞”，点赞很高，他做了这把伞卖爆；后来养成习惯，评论区点赞过10万就产1万把伞，过1000就产300把。叮咚买菜也根据用户评论许愿定制蚕蛹。结论：需求藏在抱怨里。没有技能就创造技能，需求在哪里，解决方案就在哪里。 2. 赚钱的起点是信任，不是流量 来自「认知翻倍🍊」的视频：普通人逆袭赚钱的起点不是流量，而是信任。你不需要比全世界都厉害，只需要在一个具体问题上比一部分人多走过几步。路径是：经验→内容→建立信任→走向成交，这是普通人做自媒体变现的底层逻辑。 3. 其他相关方向 - 「雷饼干」：写小说怎么月入过万（写网文作为副业变现）。 - 「也就是谦谦」：AI时代只剩一种人能赚钱，涉及被动收入、自媒体创业。 - 「可行创业手册」：练会这一件事你就该富一辈子，提前开钱眼，属创业认知类。 综合来看，收藏中的共识是：赚钱的起点是找到真实需求（从社群和评论区挖掘），用内容建立信任，再通过解决具体问题完成变现；技能可以后补，需求优先。
+                      - generic [ref=f1e98]: 已完成 · 9/17 19:43
+                - article [ref=f1e100]:
+                  - generic [ref=f1e101]:
+                    - generic [aria-hidden] [ref=f1e102]: 你
+                    - generic [ref=f1e103]: 为什么会焦虑
+                  - generic [ref=f1e104]:
+                    - generic [aria-hidden] [ref=f1e105]: 浮
+                    - generic [ref=f1e106]:
+                      - text: 收藏里关于“为什么会焦虑”的解释，可以归纳为几个核心原因： 1. 焦虑的共性是“怕” 来自「小僵尸谈哲理」的视频：所有焦虑的人都有一个共性——怕。怕丢脸、怕失败、怕改变。你越怕，生活扑面而来的麻烦反而越多。你会不停在脑海里预演最糟糕的可能性：还没上台就想象自己大脑空白、被嘲笑；还没面试就想象被问得哑口无言、被扫地出门；还没表白就想象被拒绝、沦为笑柄。 2. 本质是对不确定性的恐惧 + 灾难化思维 同一条视频指出：焦虑的本质是你对不确定性有着深重而畸形的恐惧。大脑自动开启“灾难化思维模式”，永远悲观地预设最坏结果。这种思维把你拖进恶性循环：越怕越心虚，越心虚越恐惧，最后错失机会。 3. 预期性焦虑：事情还没开始，就提前承受失败痛苦 来自「江东陵」的视频：困住人的往往不是能力，而是那些还没发生的事。心理学称之为“预期性焦虑”，特点是事情还没开始，你却已经提前承受了失败带来的痛苦。大脑天生喜欢预测未来且优先预测危险，你反复设想最坏结果，大脑就把它当成真实威胁，让你心跳加快、手心冒汗、不断犹豫——你不是输给了现实，而是输给了自己的想象。 4. 追求“最优解”的执念 来自「二百吴同学」的视频：特别容易焦虑的人都有一个执念——做任何事都要追求最优解，一步弯路都不想走。于是哪个选项都不满意，过程中一有波动就反复美化那条没选的路，结果不符合预期又用结局倒推、攻击当初的自己，越来越害怕选择。 5. 边做边怀疑，想规避一切错误 来自「润风心理成长」的视频：一边行动一边质疑（“这样看书真的有用吗”“这关系对吗”）是一种预期性焦虑，目的是避开一切错误。它往往和两种环境有关：对错误的低容错率、对绝对正确的控制。 6. 过度担心 = 透支痛苦 来自「阿楠的进化日记」的视频：过度担心和预演恐惧根本不是在预测未来，而是在透支痛苦。远虑是规划，过度担心是内耗。 7. 在意他人眼光 / 自我客体化 来自「槛外人philosophy」和「范不慌」的视频：和人打交道紧张，是因为把注意力放在“对方怎么看我”上（自我客体化），认知资源被分散；当自我认知与他人评价冲突时，会产生强烈焦虑（认知失调）。 8. 选择带来的自由眩晕 来自「无用之学」的视频：焦虑是自由带来的眩晕。选择困难本质上是站在十字路口时的眩晕感，但正是这种犹豫和焦虑，证明你不是被命运推着走。 综合来看，收藏中的共识是：焦虑多源于对不确定性和失败的恐惧、灾难化/预期性思维、追求完美最优解、过度在意他人评价，以及把未来的痛苦提前透支到当下。
+                      - generic [ref=f1e107]: 已完成 · 9/17 19:44
+              - generic [ref=f1e60]:
+                - generic [ref=f1e61]: 给 Agent 的问题
+                - textbox "给 Agent 的问题" [ref=f1e62]:
+                  - /placeholder: 继续追问，或开始一个新的研究主题…
+                - button "发送" [ref=f1e65] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=f1e67]: ↑
+            - complementary "Agent 执行详情" [ref=f1e68]:
+              - generic [ref=f1e69]:
+                - generic [ref=f1e70]:
+                  - text: LIVE TRACE
+                  - heading "执行详情" [level=2] [ref=f1e71]
+                - button "关闭执行详情" [ref=f1e108] [cursor=pointer]: ×
+              - generic [ref=f1e72]: 已完成
+              - generic [ref=f1e73]:
+                - heading "任务计划" [level=3] [ref=f1e74]
+                - generic [ref=f1e75]:
+                  - generic [ref=f1e109]:
+                    - generic [ref=f1e110]: ✓
+                    - generic [ref=f1e111]: 检索收藏中与焦虑、情绪、心理相关的内容
+                  - generic [ref=f1e112]:
+                    - generic [ref=f1e113]: ✓
+                    - generic [ref=f1e114]: 读取高相关视频的完整转写
+                  - generic [ref=f1e115]:
+                    - generic [ref=f1e116]: –
+                    - generic [ref=f1e117]: 基于证据总结焦虑的原因
+              - generic [ref=f1e77]:
+                - heading "执行轨迹" [level=3] [ref=f1e78]
+                - generic [ref=f1e79]:
+                  - generic [ref=f1e118]:
+                    - generic [ref=f1e119]: ✓
+                    - generic [ref=f1e120]: 制定研究计划
+                  - generic [ref=f1e121]:
+                    - generic [ref=f1e122]: ✓
+                    - generic [ref=f1e123]: 语义检索收藏
+                  - generic [ref=f1e124]:
+                    - generic [ref=f1e125]: ✓
+                    - generic [ref=f1e126]: 读取视频内容
+                  - generic [ref=f1e127]:
+                    - generic [ref=f1e128]: ·
+                    - generic [ref=f1e129]: 整理最终回答
+              - generic [ref=f1e81]:
+                - heading "引用来源" [level=3] [ref=f1e82]
+                - generic [ref=f1e83]:
+                  - 'link "所有焦虑的人都有一个共性 那就是怕 #情感 #成长思维 #情感共鸣 #原创动画 #抖音精选 ↗" [ref=f1e130] [cursor=pointer]':
+                    - /url: https://www.douyin.com/video/7679343221171883283
+                  - 'link "“行动，是恐惧的唯一解药” #哲学 #心理学 #预期性焦虑#抖音精选 #看优质好内容就来抖音精选 ↗" [ref=f1e131] [cursor=pointer]':
+                    - /url: https://www.douyin.com/video/7666065779929926922
+                  - 'link "不再被安排！3步重建你的自主决策系统 明明讨厌现在的生活，却因为不敢选而被迫内耗？根源在于：25岁前，你根本没做过几次真正的选择。 从小被安排的人生，剥夺了你试错的机会，导致成年后面对决策心智崩塌，总把选项当成孤注一掷的赌博。 决策力是可以重建的！本期视频分享一套完整方法论： 1️⃣ 转变心态：从“追求正确”转向“追求成为自己” 2️⃣ 建立阶梯：像练肌肉一样，从小事开始刻意练习 3️⃣ 接纳焦虑：带着眩晕感，主动向前进 别再等别人给你标准答案了。点击视频，拿回你人生的主动权。 #选择困难症 #个人成长 #心理学 #决策 #青年创作者成长计划 ↗" [ref=f1e132] [cursor=pointer]':
+                    - /url: https://www.douyin.com/video/7597015985677225225
+                  - 'link "特别容易焦虑的人都有一个执念：追求最优解 #选择困难 #青年创作者成长计划 #自我提升 #个人成长 #抖音精选 ↗" [ref=f1e133] [cursor=pointer]':
+                    - /url: https://www.douyin.com/video/7661563975938739502
+                  - 'link "有一种非常累人的模式，叫边做边怀疑，背后的目的往往是想规避所有的“错误”或者“偏离”#内耗型人格如何改善 #内耗 #焦虑 #自我怀疑 ↗" [ref=f1e134] [cursor=pointer]':
+                    - /url: https://www.douyin.com/video/7497901435430997259
+                  - 'link "摒弃过度担心的行为 过度担心和预演恐惧根本不是在预测未来，而是在透支痛苦。这和人无远虑必有近忧是两码事，远虑是规划，过度担心是内耗。只要你能尝试去最小化验证，去写下来，去主动觉知，那些焦虑根本无法在你的心里蔓延。#认知觉醒 #自我成长 #焦虑 #执行力 ↗" [ref=f1e135] [cursor=pointer]':
+                    - /url: https://www.douyin.com/video/7646761399860358070
+                  - 'link "自我客体化：为了在他人目光中存活，我把自己变成“物” #哲学 #精神分析 #拉康#心理学 #思想回声计划 ↗" [ref=f1e136] [cursor=pointer]':
+                    - /url: https://www.douyin.com/video/7679759855330135330
+                  - 'link "你为什么总是在意别人的眼光？#内耗 #情感 #提升自己 #个人成长 #青年创作者扶持计划 ↗" [ref=f1e137] [cursor=pointer]':
+                    - /url: https://www.douyin.com/video/7582968020495158554
+                  - 'link "明明过得不差，为什么你总是莫名焦虑？ #哲学 #思维 #小植物大道理 #焦虑 #斯多葛主义 ↗" [ref=f1e138] [cursor=pointer]':
+                    - /url: https://www.douyin.com/video/7632625698930167075
+                  - 'link "为什么不断进步的人都会陷入情绪问题？#哲学 #心理学 #自我成长 #情绪 ↗" [ref=f1e139] [cursor=pointer]':
+                    - /url: https://www.douyin.com/video/7647087757201853750
+  - status

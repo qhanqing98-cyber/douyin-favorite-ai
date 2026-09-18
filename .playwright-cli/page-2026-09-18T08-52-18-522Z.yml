@@ -1,0 +1,87 @@
+- generic [ref=f2e1]:
+  - link "跳到主要内容" [ref=f2e2] [cursor=pointer]:
+    - /url: "#mainContent"
+  - generic [ref=f2e3]:
+    - complementary "应用导航" [ref=f2e4]:
+      - generic [ref=f2e5]:
+        - generic [aria-hidden] [ref=f2e6]: 浮
+        - generic [ref=f2e7]:
+          - generic [ref=f2e8]: 浮光
+          - generic [ref=f2e9]: 收藏研究台
+        - button "关闭导航" [ref=f2e10] [cursor=pointer]: ×
+      - button "新建研究" [ref=f2e11] [cursor=pointer]:
+        - generic [aria-hidden] [ref=f2e12]: ＋
+      - navigation "主要功能" [ref=f2e14]:
+        - button "Agent 研究" [ref=f2e15] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f2e16]: ✦
+        - button "收藏库" [ref=f2e18] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f2e19]: ⌕
+        - button "数据维护" [active] [ref=f2e21] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f2e22]: ⌁
+      - generic [ref=f2e24]:
+        - generic [ref=f2e25]:
+          - generic [ref=f2e26]: 研究会话
+          - generic [ref=f2e27]: "1"
+        - generic [ref=f2e28]:
+          - generic [aria-hidden] [ref=f2e29]: ⌕
+          - searchbox "搜索研究会话" [ref=f2e30]
+        - list [ref=f2e31]:
+          - listitem [ref=f2e32] [cursor=pointer]:
+            - generic [ref=f2e33]: 怎么赚钱
+            - generic "已完成" [ref=f2e34]
+            - generic [ref=f2e35]: 为什么会焦虑
+      - generic "收藏库统计" [ref=f2e36]:
+        - generic [ref=f2e37]:
+          - strong [ref=f2e38]: "464"
+          - generic [ref=f2e39]: 收藏
+        - generic [ref=f2e40]:
+          - strong [ref=f2e41]: "36"
+          - generic [ref=f2e42]: 转写
+        - generic [ref=f2e43]:
+          - strong [ref=f2e44]: "39"
+          - generic [ref=f2e45]: 概要
+    - generic [ref=f2e46]:
+      - banner [ref=f2e47]:
+        - button "打开导航" [ref=f2e48] [cursor=pointer]: ☰
+        - generic [ref=f2e49]: 浮光 · 收藏研究台
+        - button "查看执行详情" [ref=f2e50] [cursor=pointer]: ☷
+      - main [ref=f2e51]:
+        - generic [ref=f2e744]:
+          - generic [ref=f2e746]:
+            - generic [ref=f2e747]: DATA OPERATIONS
+            - heading "数据维护" [level=1] [ref=f2e748]
+            - paragraph [ref=f2e749]: 同步、转写、概要、分类和索引任务都在这里运行。
+          - generic [ref=f2e750]:
+            - article [ref=f2e751]:
+              - generic [ref=f2e752]: "01"
+              - generic [ref=f2e753]:
+                - heading "同步来源" [level=2] [ref=f2e754]
+                - paragraph [ref=f2e755]: 登录抖音并获取最新收藏。
+              - generic [ref=f2e756]:
+                - button "扫码登录" [ref=f2e757] [cursor=pointer]
+                - button "同步收藏夹" [ref=f2e758] [cursor=pointer]
+            - article [ref=f2e759]:
+              - generic [ref=f2e760]: "02"
+              - generic [ref=f2e761]:
+                - heading "补全内容" [level=2] [ref=f2e762]
+                - paragraph [ref=f2e763]: 生成可检索的转写和概要。
+              - generic [ref=f2e764]:
+                - button "转写 10 条" [ref=f2e765] [cursor=pointer]
+                - button "转写全部" [ref=f2e766] [cursor=pointer]
+                - button "概要 10 条" [ref=f2e767] [cursor=pointer]
+                - button "概要全部" [ref=f2e768] [cursor=pointer]
+            - article [ref=f2e769]:
+              - generic [ref=f2e770]: "03"
+              - generic [ref=f2e771]:
+                - heading "整理知识" [level=2] [ref=f2e772]
+                - paragraph [ref=f2e773]: 分类收藏并维护语义索引。
+              - generic [ref=f2e774]:
+                - button "分类未整理内容" [ref=f2e775] [cursor=pointer]
+                - button "重新分类全部" [ref=f2e776] [cursor=pointer]
+                - button "重建语义索引" [ref=f2e777] [cursor=pointer]
+          - generic [ref=f2e778]:
+            - generic [ref=f2e779]:
+              - heading "后台任务" [level=2] [ref=f2e780]
+              - generic [ref=f2e781]: 空闲
+            - generic [ref=f2e782]: 当前没有运行中的任务。
+  - status

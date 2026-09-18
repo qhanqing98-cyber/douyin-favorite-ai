@@ -1,0 +1,77 @@
+- generic [active] [ref=f1e1]:
+  - link "跳到主要内容" [ref=f1e2] [cursor=pointer]:
+    - /url: "#mainContent"
+  - generic [ref=f1e3]:
+    - complementary "应用导航" [ref=f1e4]:
+      - generic [ref=f1e5]:
+        - generic [aria-hidden] [ref=f1e6]: 浮
+        - generic [ref=f1e7]:
+          - generic [ref=f1e8]: 浮光
+          - generic [ref=f1e9]: 收藏研究台
+      - button "新建研究" [ref=f1e10] [cursor=pointer]:
+        - generic [aria-hidden] [ref=f1e11]: ＋
+      - navigation "主要功能" [ref=f1e13]:
+        - button "Agent 研究" [ref=f1e14] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f1e15]: ✦
+        - button "收藏库" [ref=f1e17] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f1e18]: ⌕
+        - button "数据维护" [ref=f1e20] [cursor=pointer]:
+          - generic [aria-hidden] [ref=f1e21]: ⌁
+      - generic [ref=f1e23]:
+        - generic [ref=f1e24]:
+          - generic [ref=f1e25]: 研究会话
+          - generic [ref=f1e26]: "1"
+        - generic [ref=f1e27]:
+          - generic [aria-hidden] [ref=f1e28]: ⌕
+          - searchbox "搜索研究会话" [ref=f1e29]
+        - list [ref=f1e30]:
+          - listitem [ref=f1e31] [cursor=pointer]:
+            - generic [ref=f1e32]: 怎么赚钱
+            - generic "已完成" [ref=f1e33]
+            - generic [ref=f1e34]: 为什么会焦虑
+      - generic "收藏库统计" [ref=f1e35]:
+        - generic [ref=f1e36]:
+          - strong [ref=f1e37]: "464"
+          - generic [ref=f1e38]: 收藏
+        - generic [ref=f1e39]:
+          - strong [ref=f1e40]: "36"
+          - generic [ref=f1e41]: 转写
+        - generic [ref=f1e42]:
+          - strong [ref=f1e43]: "39"
+          - generic [ref=f1e44]: 概要
+    - main [ref=f1e46]:
+      - generic [ref=f1e47]:
+        - generic [ref=f1e48]:
+          - generic [ref=f1e49]:
+            - generic [ref=f1e50]: AGENT RESEARCH
+            - heading "新建研究" [level=1] [ref=f1e51]
+            - paragraph [ref=f1e52]: 提出问题，Agent 会规划任务并检索你的收藏。
+          - generic [ref=f1e53]:
+            - button "重命名" [ref=f1e54] [cursor=pointer]
+            - button "删除会话" [ref=f1e55] [cursor=pointer]
+        - generic [ref=f1e56]:
+          - region "研究对话" [ref=f1e57]:
+            - generic [ref=f1e58]: 正在恢复研究会话…
+            - generic [ref=f1e60]:
+              - generic [ref=f1e61]: 给 Agent 的问题
+              - textbox "给 Agent 的问题" [ref=f1e62]:
+                - /placeholder: 继续追问，或开始一个新的研究主题…
+              - generic [ref=f1e63]:
+                - generic [ref=f1e64]: Enter 发送 · Shift + Enter 换行
+                - button "发送" [ref=f1e65] [cursor=pointer]:
+                  - generic [aria-hidden] [ref=f1e67]: ↑
+          - complementary "Agent 执行详情" [ref=f1e68]:
+            - generic [ref=f1e70]:
+              - text: LIVE TRACE
+              - heading "执行详情" [level=2] [ref=f1e71]
+            - generic [ref=f1e72]: 等待任务
+            - generic [ref=f1e73]:
+              - heading "任务计划" [level=3] [ref=f1e74]
+              - generic [ref=f1e75]: 开始研究后，这里会显示 Agent 的任务拆分。
+            - generic [ref=f1e77]:
+              - heading "执行轨迹" [level=3] [ref=f1e78]
+              - generic [ref=f1e79]: 工具调用会按时间出现在这里。
+            - generic [ref=f1e81]:
+              - heading "引用来源" [level=3] [ref=f1e82]
+              - generic [ref=f1e83]: 检索到的引用来源会出现在这里。
+  - status

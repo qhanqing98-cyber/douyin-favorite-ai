@@ -1,867 +1,202 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>抖音收藏知识库</title>
-<style>
-  :root {
-    --bg: #eaf0f7;
-    --panel: rgba(255, 255, 255, .55);
-    --card: rgba(255, 255, 255, .66);
-    --border: rgba(122, 148, 189, .25);
-    --text: #3a4b60;
-    --muted: #8494a9;
-    --accent: #4a90d9;
-    --accent-2: #a687c9;
-    --ok: #5f9470;
-    --warn: #c98a4b;
-    --danger: #c46a5c;
-    --radius: 18px;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html { scrollbar-width: thin; scrollbar-color: rgba(122,148,189,.45) transparent; }
-  /* 睡莲池塘：多层柔光色斑，固定不随滚动，像一层稀释的颜料 */
-  body {
-    background:
-      radial-gradient(900px 420px at 12% -8%, rgba(74,144,217,.20), transparent 65%),
-      radial-gradient(800px 400px at 88% -4%, rgba(200,168,212,.28), transparent 65%),
-      radial-gradient(700px 380px at 80% 14%, rgba(245,217,139,.22), transparent 70%),
-      radial-gradient(900px 520px at 4% 34%, rgba(143,175,126,.15), transparent 70%),
-      radial-gradient(600px 300px at 50% 105%, rgba(232,144,122,.12), transparent 70%),
-      linear-gradient(180deg, #e9eff6 0%, #f2eef4 45%, #edf2f3 100%);
-    background-attachment: fixed;
-    color: var(--text);
-    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
-    font-weight: 300;
-    max-width: 920px; margin: 0 auto; padding: 28px 16px 90px;
-    min-height: 100vh;
-  }
-  ::-webkit-scrollbar { width: 8px; height: 8px; }
-  ::-webkit-scrollbar-thumb { background: rgba(122,148,189,.4); border-radius: 8px; }
-  mark { background: linear-gradient(90deg, rgba(245,217,139,.7), rgba(240,212,148,.45)); color: #5a4a2f; border-radius: 6px; padding: 0 3px; }
-
-  /* ---------- 头部 ---------- */
-  header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 22px; }
-  h1 { font-size: 22px; font-weight: 350; letter-spacing: 2.5px;
-       background: linear-gradient(90deg, #4a90d9, #a687c9 55%, #d9916f);
-       -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
-  .statcards { display: flex; gap: 10px; margin-left: auto; }
-  .scard { background: rgba(255,255,255,.5); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-           border: 1px solid rgba(255,255,255,.75); border-radius: 16px; padding: 8px 16px; text-align: center; min-width: 74px;
-           box-shadow: 0 6px 20px rgba(74,144,217,.10); }
-  .scard b { display: block; font-size: 17px; font-weight: 600; color: #41556d; }
-  .scard span { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
-
-  /* ---------- 区块：雾面玻璃 ---------- */
-  section { background: var(--panel); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-            border: 1px solid rgba(255,255,255,.7); border-radius: var(--radius); padding: 18px; margin-bottom: 18px;
-            box-shadow: 0 10px 36px rgba(74,144,217,.10), inset 0 1px 0 rgba(255,255,255,.8);
-            transition: box-shadow .25s; }
-  section:hover { box-shadow: 0 14px 44px rgba(74,144,217,.16), inset 0 1px 0 rgba(255,255,255,.8); }
-  .label { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; letter-spacing: .5px;
-           margin-bottom: 12px; color: #4a5d75; cursor: pointer; user-select: none; }
-  .label .chev { margin-left: auto; color: var(--muted); font-size: 12px; transition: transform .3s; }
-  section.collapsed .label .chev { transform: rotate(-90deg); }
-  .sec-body { display: grid; grid-template-rows: 1fr; transition: grid-template-rows .3s ease; }
-  section.collapsed .sec-body { grid-template-rows: 0fr; }
-  .sec-inner { overflow: hidden; min-height: 0; }
-  .res-body { display: grid; grid-template-rows: 1fr; transition: grid-template-rows .3s ease; }
-  section.collapsed .res-body, section.results-hidden .res-body { grid-template-rows: 0fr; }
-  .res-inner { overflow: hidden; min-height: 0; }
-
-  .row { display: flex; gap: 8px; flex-wrap: wrap; }
-  input[type=text] {
-    flex: 1; min-width: 200px; background: rgba(255,255,255,.72); border: 1px solid rgba(122,148,189,.28);
-    color: var(--text); border-radius: 999px; padding: 11px 18px; font-size: 14px; outline: none;
-    transition: border-color .2s, box-shadow .2s, background .2s;
-  }
-  input[type=text]:focus { border-color: rgba(74,144,217,.6); box-shadow: 0 0 0 4px rgba(74,144,217,.12); background: #fff; }
-  input[type=text]::placeholder { color: #a3aec0; }
-  button {
-    background: linear-gradient(120deg, #5b9ce0, #a687c9); color: #fff; border: none; border-radius: 999px;
-    padding: 10px 20px; font-size: 14px; font-weight: 400; letter-spacing: .5px; cursor: pointer; white-space: nowrap;
-    box-shadow: 0 6px 18px rgba(74,144,217,.22); transition: transform .12s, box-shadow .2s, filter .2s;
-  }
-  button:hover { box-shadow: 0 8px 26px rgba(122,123,201,.32); filter: brightness(1.06); }
-  button:active { transform: scale(.97); }
-  button.ghost { background: rgba(255,255,255,.6); border: 1px solid rgba(122,148,189,.32); color: #4a5d75; box-shadow: none; }
-  button.ghost:hover { border-color: rgba(74,144,217,.55); color: #3d6ea8; box-shadow: none; }
-  button.danger { background: rgba(255,255,255,.5); border: 1px solid rgba(196,106,92,.55); color: var(--danger); box-shadow: none; }
-  button.danger:hover { background: rgba(232,144,122,.14); box-shadow: none; filter: none; }
-  button:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; transform: none; }
-  .hint { font-size: 12px; color: var(--muted); align-self: center; }
-
-  /* ---------- 进度条 / 任务行 ---------- */
-  .job { font-size: 13px; margin-top: 10px; color: var(--muted); min-height: 18px; }
-  .job.err { color: var(--warn); }
-  .job.done { color: var(--ok); }
-  .barwrap { position: relative; margin-top: 12px; height: 24px; background: rgba(255,255,255,.6);
-             border: 1px solid rgba(122,148,189,.28); border-radius: 999px; overflow: hidden; }
-  .bar { position: relative; height: 100%; width: 0%;
-         background: linear-gradient(90deg, #4a90d9, #a687c9, #e8b06f, #4a90d9); background-size: 200% 100%;
-         animation: flow 3s linear infinite; border-radius: 999px; transition: width .5s; overflow: hidden; }
-  @keyframes flow { to { background-position: 200% 0; } }
-  .bar::after { content: ""; position: absolute; inset: 0;
-    background: linear-gradient(45deg, transparent 25%, rgba(255,255,255,.35) 50%, transparent 75%); background-size: 28px 28px;
-    animation: stripe 1s linear infinite; }
-  @keyframes stripe { to { background-position: 28px 0; } }
-  .bartext { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-             font-size: 12px; color: #41556d; text-shadow: 0 1px 0 rgba(255,255,255,.6); }
-
-  /* ---------- 结果卡片 ---------- */
-  .card { background: var(--card); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-          border: 1px solid rgba(255,255,255,.8); border-radius: 16px; padding: 16px; margin-top: 12px;
-          box-shadow: 0 6px 20px rgba(74,144,217,.08);
-          transition: transform .2s, box-shadow .2s, border-color .2s; animation: cardIn .3s ease; }
-  .card:hover { transform: translateY(-2px); box-shadow: 0 12px 30px rgba(74,144,217,.15); border-color: rgba(255,255,255,.95); }
-  @keyframes cardIn { from { opacity: 0; transform: translateY(6px); } }
-  .card-top { display: flex; align-items: flex-start; gap: 10px; }
-  .card-top h3 { flex: 1; font-size: 15px; line-height: 1.55; font-weight: 500; color: #41556d; }
-  .badges { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
-  .meta { font-size: 12px; color: var(--muted); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0 6px; }
-  .ava { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%;
-         background: linear-gradient(135deg, #5b9ce0, #a687c9); color: #fff; font-size: 11px; flex-shrink: 0;
-         box-shadow: 0 2px 8px rgba(74,144,217,.25); }
-  .tag { display: inline-block; background: rgba(166,135,201,.15); color: #8a6bb0; border-radius: 999px; padding: 2px 10px;
-         font-size: 12px; margin: 0 6px 6px 0; }
-  .cat { color: #8a6bb0; font-size: 12px; border: 1px solid rgba(166,135,201,.4); border-radius: 999px; padding: 1px 9px; }
-  .flag { color: var(--ok); font-size: 12px; background: rgba(143,175,126,.18); border-radius: 999px; padding: 1px 9px; }
-  .summary { font-size: 13px; color: #4c5f77; line-height: 1.75; white-space: pre-wrap;
-             border-left: 3px solid rgba(74,144,217,.45);
-             background: linear-gradient(90deg, rgba(74,144,217,.07), rgba(245,217,139,.08));
-             border-radius: 0 10px 10px 0; padding: 8px 12px; margin: 10px 0; }
-  .transcript { font-size: 13px; color: var(--muted); line-height: 1.75; white-space: pre-wrap; }
-  .transcript.clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-  a { color: var(--accent); text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  .openlink { font-size: 12px; border: 1px solid rgba(122,148,189,.32); border-radius: 999px; padding: 2px 10px; color: var(--accent); transition: border-color .15s; }
-  .openlink:hover { border-color: rgba(74,144,217,.6); text-decoration: none; }
-  .toggle { font-size: 12px; color: var(--accent); cursor: pointer; margin-top: 6px; display: inline-block; }
-  .cbwrap { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); cursor: pointer;
-            border: 1px solid rgba(122,148,189,.32); border-radius: 999px; padding: 3px 10px; flex-shrink: 0; transition: border-color .15s; }
-  .cbwrap:hover { border-color: rgba(74,144,217,.55); }
-  input[type=checkbox] { accent-color: var(--accent); width: 14px; height: 14px; }
-
-  /* ---------- AI 问答 ---------- */
-  .answer { font-size: 14px; line-height: 1.85; white-space: pre-wrap; color: #46586f; }
-  .src { font-size: 12px; color: var(--accent); margin-top: 6px; }
-  .agent-steps { display: grid; gap: 6px; margin: 12px 0; }
-  .agent-step { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; padding: 6px 10px;
-                border-left: 2px solid rgba(74,144,217,.35); background: rgba(255,255,255,.32); }
-  .agent-step.done { color: var(--ok); border-left-color: rgba(143,175,126,.65); }
-  .agent-step.waiting { color: var(--warn); border-left-color: rgba(201,138,75,.7); }
-  .agent-step.failed { color: var(--danger); border-left-color: rgba(196,106,92,.65); }
-  .agent-approval { margin-top: 12px; padding: 14px; border: 1px solid rgba(201,138,75,.45); border-radius: 14px;
-                    background: rgba(245,217,139,.12); color: #6f5b3b; }
-  .agent-approval h3 { font-size: 14px; font-weight: 500; margin-bottom: 6px; }
-  .agent-approval p { font-size: 13px; line-height: 1.7; margin-bottom: 10px; }
-  .agent-approval .actions { display: flex; gap: 8px; flex-wrap: wrap; }
-  .agent-sources { margin-top: 10px; padding-top: 8px; border-top: 1px dashed rgba(122,148,189,.28); }
-  .agent-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 18px; align-items: start; }
-  .agent-sidebar { border-right: 1px solid rgba(122,148,189,.16); padding-right: 14px; }
-  .agent-sidebar-head, .agent-session-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .agent-sidebar-head { color: #536982; font-size: 12px; letter-spacing: .5px; margin-bottom: 8px; }
-  .agent-sidebar-head button, .agent-session-head button { padding: 5px 9px; font-size: 11px; }
-  .agent-sessions { display: grid; gap: 5px; }
-  .agent-session-row { display: flex; align-items: center; gap: 6px; padding: 8px 9px; border: 1px solid transparent; border-radius: 10px; color: var(--muted); cursor: pointer; }
-  .agent-session-row:hover { background: rgba(255,255,255,.45); }
-  .agent-session-row.active { background: rgba(255,255,255,.72); border-color: rgba(122,148,189,.22); color: #536982; }
-  .agent-session-copy { min-width: 0; flex: 1; }
-  .agent-session-copy b, .agent-session-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .agent-session-copy b { font-size: 12px; font-weight: 500; }
-  .agent-session-copy span { font-size: 10px; margin-top: 3px; }
-  .agent-session-row button { flex-shrink: 0; padding: 3px 6px; font-size: 10px; }
-  .agent-workspace { min-width: 0; }
-  .agent-session-head { color: #536982; font-size: 13px; margin-bottom: 10px; }
-  .agent-session-head .hint { font-size: 11px; font-weight: 400; }
-  .agent-plan { display: grid; gap: 5px; margin: 10px 0; }
-  .agent-plan-row { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; padding: 5px 9px; border-left: 2px solid rgba(122,148,189,.22); }
-  .agent-plan-row.done { color: var(--ok); border-left-color: rgba(143,175,126,.65); }
-  .agent-plan-row.active { color: var(--accent); border-left-color: rgba(122,148,189,.7); }
-  .agent-plan-row.failed { color: var(--danger); border-left-color: rgba(196,106,92,.65); }
-  .typing { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; padding: 14px 0; }
-  .dots { display: inline-flex; gap: 4px; }
-  .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: bounce 1.2s infinite; }
-  .dots i:nth-child(2) { animation-delay: .15s; } .dots i:nth-child(3) { animation-delay: .3s; }
-  @keyframes bounce { 0%, 60%, 100% { transform: translateY(0); opacity: .5; } 30% { transform: translateY(-5px); opacity: 1; } }
-
-  /* ---------- 分类 chips ---------- */
-  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
-  .chip { display: inline-block; border: 1px solid rgba(122,148,189,.3); background: rgba(255,255,255,.55); color: #6b7d94;
-          border-radius: 999px; padding: 4px 13px; font-size: 12px; cursor: pointer; transition: all .15s; }
-  .chip:hover { border-color: rgba(74,144,217,.55); color: #3d6ea8; }
-  .chip.on { background: linear-gradient(120deg, #5b9ce0, #a687c9); border-color: transparent; color: #fff;
-             box-shadow: 0 4px 14px rgba(74,144,217,.25); }
-  .chip b { font-weight: 600; margin-left: 3px; }
-
-  /* ---------- 骨架屏 / 空状态 ---------- */
-  .sk { height: 13px; border-radius: 6px; margin-bottom: 10px;
-        background: linear-gradient(90deg, rgba(255,255,255,.45) 25%, rgba(255,255,255,.85) 50%, rgba(255,255,255,.45) 75%);
-        background-size: 200% 100%; animation: shimmer 1.2s linear infinite; }
-  @keyframes shimmer { to { background-position: -200% 0; } }
-  .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 26px 0; }
-  .empty .big { font-size: 26px; display: block; margin-bottom: 8px; }
-
-  /* ---------- 任务历史 ---------- */
-  .hrow { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); padding: 5px 0;
-          border-bottom: 1px dashed rgba(122,148,189,.28); }
-  .hrow:last-child { border-bottom: none; }
-  .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-  .hrow .del { margin-left: auto; cursor: pointer; opacity: 0; transition: opacity .15s; color: var(--muted); }
-  .hrow:hover .del { opacity: 1; }
-  .hrow .del:hover { color: var(--danger); }
-
-  /* ---------- Toast ---------- */
-  .toast { position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%) translateY(20px); opacity: 0; pointer-events: none;
-           background: rgba(255,255,255,.88); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-           border: 1px solid rgba(122,148,189,.32); color: #41556d; font-size: 13px; border-radius: 999px;
-           padding: 10px 22px; transition: all .25s; z-index: 99; box-shadow: 0 10px 30px rgba(74,144,217,.18); }
-  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-  .toast.err { border-color: rgba(201,138,75,.6); color: var(--warn); }
-  .toast.ok { border-color: rgba(143,175,126,.6); color: var(--ok); }
-
-  #searchNote { cursor: pointer; user-select: none; }
-  .btn-group { display: flex; flex-direction: column; gap: 6px; }
-  .btn-group .cap { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
-  .grp { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-
-  @media (max-width: 640px) {
-    .statcards { margin-left: 0; width: 100%; justify-content: space-between; }
-    .scard { flex: 1; }
-    .badges { justify-content: flex-start; }
-    .agent-layout { grid-template-columns: 1fr; gap: 12px; }
-    .agent-sidebar { border-right: 0; border-bottom: 1px solid rgba(122,148,189,.16); padding: 0 0 10px; }
-    .agent-sessions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  }
-
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light">
+  <title>浮光 · 抖音收藏研究台</title>
+  <link rel="stylesheet" href="/static/app.css?v=4">
 </head>
 <body>
-<header>
-  <h1>🎨 抖音收藏知识库</h1>
-  <div class="statcards">
-    <div class="scard"><b id="stTotal">–</b><span>收藏</span></div>
-    <div class="scard"><b id="stTr">–</b><span>已转写</span></div>
-    <div class="scard"><b id="stSum">–</b><span>已概要</span></div>
+  <a class="skip-link" href="#mainContent">跳到主要内容</a>
+  <div class="app-shell">
+    <aside class="sidebar" id="appSidebar" aria-label="应用导航">
+      <div class="brand-row">
+        <div class="brand-mark" aria-hidden="true">浮</div>
+        <div>
+          <div class="brand-name">浮光</div>
+          <div class="brand-subtitle">收藏研究台</div>
+        </div>
+        <button class="icon-button sidebar-close" id="sidebarClose" aria-label="关闭导航">×</button>
+      </div>
+
+      <button class="new-session-button" id="newSessionButton">
+        <span aria-hidden="true">＋</span><span>新建研究</span>
+      </button>
+
+      <nav class="primary-nav" aria-label="主要功能">
+        <button class="nav-item active" data-view="agent" aria-current="page">
+          <span class="nav-icon" aria-hidden="true">✦</span><span>Agent 研究</span>
+        </button>
+        <button class="nav-item" data-view="library">
+          <span class="nav-icon" aria-hidden="true">⌕</span><span>收藏库</span>
+        </button>
+        <button class="nav-item" data-view="maintenance">
+          <span class="nav-icon" aria-hidden="true">⌁</span><span>数据维护</span>
+        </button>
+      </nav>
+
+      <div class="session-section">
+        <div class="section-caption">
+          <span>研究会话</span><span id="sessionCount">0</span>
+        </div>
+        <label class="session-search">
+          <span aria-hidden="true">⌕</span>
+          <input id="sessionSearch" type="search" placeholder="搜索会话" aria-label="搜索研究会话">
+        </label>
+        <div class="session-list" id="agentSessions" role="list"></div>
+      </div>
+
+      <div class="library-stats" aria-label="收藏库统计">
+        <div><strong id="stTotal">–</strong><span>收藏</span></div>
+        <div><strong id="stTr">–</strong><span>转写</span></div>
+        <div><strong id="stSum">–</strong><span>概要</span></div>
+      </div>
+    </aside>
+
+    <button class="sidebar-backdrop" id="sidebarBackdrop" aria-label="关闭导航"></button>
+
+    <div class="workspace">
+      <header class="mobile-bar">
+        <button class="icon-button" id="sidebarOpen" aria-label="打开导航">☰</button>
+        <span>浮光 · 收藏研究台</span>
+        <button class="icon-button" id="inspectorOpen" aria-label="查看执行详情">☷</button>
+      </header>
+
+      <main id="mainContent">
+        <section class="app-view active" id="viewAgent" data-view-panel="agent">
+          <header class="view-header agent-header">
+            <div>
+              <div class="eyebrow">AGENT RESEARCH</div>
+              <h1 id="agentSessionTitle">新建研究</h1>
+              <p id="agentSessionMeta">提出问题，Agent 会规划任务并检索你的收藏。</p>
+            </div>
+            <div class="header-actions">
+              <button class="text-button" id="renameSessionButton">重命名</button>
+              <button class="text-button danger-text" id="deleteSessionButton">删除会话</button>
+            </div>
+          </header>
+
+          <div class="agent-workbench">
+            <section class="conversation-panel" aria-label="研究对话">
+              <div class="conversation" id="conversation" aria-live="polite"></div>
+              <div id="agentApproval"></div>
+              <form class="composer" id="agentComposer">
+                <label class="visually-hidden" for="question">给 Agent 的问题</label>
+                <textarea id="question" rows="1" placeholder="继续追问，或开始一个新的研究主题…"></textarea>
+                <div class="composer-footer">
+                  <span>Enter 发送 · Shift + Enter 换行</span>
+                  <button class="send-button" id="btnAgentAsk" type="submit">
+                    <span>发送</span><span aria-hidden="true">↑</span>
+                  </button>
+                </div>
+              </form>
+            </section>
+
+            <aside class="agent-inspector" id="agentInspector" aria-label="Agent 执行详情">
+              <div class="inspector-head">
+                <div>
+                  <span class="eyebrow">LIVE TRACE</span>
+                  <h2>执行详情</h2>
+                </div>
+                <button class="icon-button inspector-close" id="inspectorClose" aria-label="关闭执行详情">×</button>
+              </div>
+              <div class="run-status" id="agentRunStatus">等待任务</div>
+              <section class="inspector-block">
+                <h3>任务计划</h3>
+                <div id="agentPlan" class="agent-plan"></div>
+              </section>
+              <section class="inspector-block">
+                <h3>执行轨迹</h3>
+                <div id="agentSteps" class="agent-steps"></div>
+              </section>
+              <section class="inspector-block">
+                <h3>引用来源</h3>
+                <div id="agentSources" class="agent-sources"></div>
+              </section>
+            </aside>
+          </div>
+        </section>
+
+        <section class="app-view" id="viewLibrary" data-view-panel="library">
+          <header class="view-header">
+            <div>
+              <div class="eyebrow">KNOWLEDGE LIBRARY</div>
+              <h1>收藏库</h1>
+              <p>搜索标题、标签、作者和转写内容。</p>
+            </div>
+          </header>
+          <form class="search-toolbar" id="librarySearchForm">
+            <label class="search-field">
+              <span aria-hidden="true">⌕</span>
+              <input type="search" id="q" placeholder="输入关键词或一句话…">
+            </label>
+            <button type="submit">搜索收藏</button>
+            <button type="button" class="secondary-button" id="showLibraryButton">最近收藏</button>
+          </form>
+          <div class="filter-row">
+            <div class="chips" id="catChips"></div>
+            <button class="secondary-button compact" id="btnSel" disabled>转写勾选 · 0</button>
+          </div>
+          <div class="result-summary" id="searchNote"></div>
+          <div class="library-results" id="results"></div>
+        </section>
+
+        <section class="app-view" id="viewMaintenance" data-view-panel="maintenance">
+          <header class="view-header">
+            <div>
+              <div class="eyebrow">DATA OPERATIONS</div>
+              <h1>数据维护</h1>
+              <p>同步、转写、概要、分类和索引任务都在这里运行。</p>
+            </div>
+          </header>
+
+          <div class="operation-grid">
+            <article class="operation-group">
+              <span class="operation-index">01</span>
+              <div><h2>同步来源</h2><p>登录抖音并获取最新收藏。</p></div>
+              <div class="operation-actions">
+                <button class="secondary-button" id="btnLogin">扫码登录</button>
+                <button id="btnCrawl">同步收藏夹</button>
+              </div>
+            </article>
+            <article class="operation-group">
+              <span class="operation-index">02</span>
+              <div><h2>补全内容</h2><p>生成可检索的转写和概要。</p></div>
+              <div class="operation-actions">
+                <button class="secondary-button" id="btnTr">转写 10 条</button>
+                <button id="btnTrAll">转写全部</button>
+                <button class="secondary-button" id="btnSum">概要 10 条</button>
+                <button id="btnSumAll">概要全部</button>
+              </div>
+            </article>
+            <article class="operation-group">
+              <span class="operation-index">03</span>
+              <div><h2>整理知识</h2><p>分类收藏并维护语义索引。</p></div>
+              <div class="operation-actions">
+                <button id="btnCls">分类未整理内容</button>
+                <button class="secondary-button" id="btnReCls">重新分类全部</button>
+                <button class="secondary-button" id="btnReIdx">重建语义索引</button>
+              </div>
+            </article>
+          </div>
+
+          <section class="job-console">
+            <div class="console-head"><h2>后台任务</h2><span id="jobState">空闲</span></div>
+            <div class="barwrap" id="barwrap" hidden>
+              <div class="bar" id="bar"></div><span class="bartext" id="bartext"></span>
+            </div>
+            <div class="job" id="jobLine">当前没有运行中的任务。</div>
+            <button class="danger-button compact" id="btnCancel" hidden>取消当前任务</button>
+            <div class="history" id="history"></div>
+          </section>
+        </section>
+      </main>
+    </div>
   </div>
-</header>
 
-<section id="secSearch">
-  <div class="label">🔍 搜索收藏 <span class="hint">标题 / 标签 / 作者 / 转写内容，支持整句，快捷键 /</span><span class="chev">▼</span></div>
-  <div class="sec-body"><div class="sec-inner">
-    <div class="row">
-      <input type="text" id="q" placeholder="输入关键词或整句，标题 / 标签 / 作者 / 转写内容都能搜 ..." onkeydown="if(event.key==='Enter')doSearch()">
-      <button onclick="doSearch()">搜索</button>
-      <button class="ghost" onclick="loadLibrary()">收藏库</button>
-    </div>
-    <div class="chips" id="catChips"></div>
-    <div class="row" style="margin-top:6px; align-items:center">
-      <button id="btnSel" onclick="transcribeSelected()" disabled>转写勾选 (0)</button>
-      <span class="hint">勾选搜索结果里想转写的视频，点这里按需转写</span>
-    </div>
-  </div></div>
-  <div class="job" id="searchNote"></div>
-  <div class="res-body"><div class="res-inner"><div id="results"></div></div></div>
-</section>
-
-<section>
-  <div class="label">🤖 Agent 研究 <span class="hint">会自主检索、读取资料；涉及转写和概要时会先征求确认</span><span class="chev">▼</span></div>
-  <div class="sec-body"><div class="sec-inner">
-    <div class="agent-layout">
-      <aside class="agent-sidebar">
-        <div class="agent-sidebar-head"><span>研究会话</span><button class="ghost" onclick="newAgentSession()">新建会话</button></div>
-        <div id="agentSessions" class="agent-sessions"></div>
-      </aside>
-      <div class="agent-workspace">
-        <div class="agent-session-head">
-          <span id="agentSessionTitle">新建研究</span>
-          <span>
-            <button class="ghost" onclick="renameCurrentAgentSession()">重命名</button>
-            <button class="ghost" onclick="deleteCurrentAgentSession()">删除</button>
-          </span>
-        </div>
-        <div class="row">
-          <input type="text" id="question" placeholder="告诉 Agent 你想研究什么，例如：比较我收藏的副业观点 ..." onkeydown="if(event.key==='Enter')doAsk()">
-          <button id="btnAgentAsk" onclick="doAsk()">开始研究</button>
-        </div>
-        <div id="agentPlan" class="agent-plan"></div>
-        <div id="agentSteps" class="agent-steps"></div>
-        <div id="agentApproval"></div>
-        <div id="answer" style="margin-top:12px"></div>
-      </div>
-    </div>
-  </div></div>
-</section>
-
-<section>
-  <div class="label">🛠 任务 <span class="hint">后台执行，同一时刻只跑一个</span><span class="chev">▼</span></div>
-  <div class="sec-body"><div class="sec-inner">
-    <div class="btn-group">
-      <div class="grp"><span class="cap">内容</span>
-        <button class="ghost" id="btnTr" onclick="runJob('/api/transcribe',10,false)">转写 10 条</button>
-        <button id="btnTrAll" onclick="runJob('/api/transcribe',0,true)">一键转写全部</button>
-        <button class="ghost" id="btnSum" onclick="runJob('/api/summarize',10,false)">概要 10 条</button>
-        <button id="btnSumAll" onclick="runJob('/api/summarize',0,true)">一键概要全部</button>
-        <button id="btnCls" onclick="runJob('/api/classify',0,false)">一键分类全部</button>
-        <button class="ghost" id="btnReCls" onclick="runJob('/api/classify',0,true)">重新分类全部</button>
-        <button class="ghost" id="btnReIdx" onclick="runJob('/api/reindex',0,false)">重建语义索引</button>
-      </div>
-      <div class="grp"><span class="cap">账号</span>
-        <button class="ghost" id="btnLogin" onclick="runJob('/api/login',0,false)">📱 扫码登录</button>
-        <button class="ghost" id="btnCrawl" onclick="runJob('/api/crawl',0,false)">🔄 同步收藏夹</button>
-        <span class="hint">登录过期或收藏夹有更新时用</span>
-      </div>
-    </div>
-    <div class="barwrap" id="barwrap" style="display:none">
-      <div class="bar" id="bar"></div>
-      <span class="bartext" id="bartext"></span>
-    </div>
-    <div class="job" id="jobLine"></div>
-    <button class="danger" id="btnCancel" style="display:none" onclick="cancelJob()">✕ 取消任务</button>
-    <div id="history" style="margin-top:12px"></div>
-  </div></div>
-</section>
-
-<div class="toast" id="toast"></div>
-
-<script>
-const $ = id => document.getElementById(id);
-
-function esc(s) {
-  return (s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-}
-function tagsOf(t) {
-  try { return JSON.parse(t || "[]").slice(0, 8); } catch { return []; }
-}
-
-// ---------- Toast 提示 ----------
-let toastTimer;
-function toast(msg, cls = "ok") {
-  const t = $("toast");
-  t.textContent = msg;
-  t.className = "toast show " + cls;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
-}
-
-// ---------- 关键词高亮 ----------
-let lastQuery = "";
-function hl(text) {
-  const safe = esc(text);
-  if (!lastQuery || !safe) return safe;
-  let out = safe;
-  for (const t of lastQuery.split(/\s+/).filter(Boolean)) {
-    const re = new RegExp(t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
-    out = out.replace(re, m => `<mark>${m}</mark>`);
-  }
-  return out;
-}
-
-async function loadStats() {
-  try {
-    const s = await (await fetch("/api/stats")).json();
-    $("stTotal").textContent = s.total;
-    $("stTr").textContent = s.transcribed;
-    $("stSum").textContent = s.summarized;
-  } catch { $("stTotal").textContent = "?"; toast("服务未连接", "err"); }
-}
-
-// ---------- 骨架屏 ----------
-const skeleton = () => Array(3).fill(
-  `<div class="card"><div class="sk" style="width:65%"></div><div class="sk" style="width:40%"></div><div class="sk" style="width:88%;height:40px"></div></div>`
-).join("");
-
-const emptyBox = (icon, text) => `<div class="empty"><span class="big">${icon}</span>${text}</div>`;
-
-function card(r) {
-  const hasT = r.transcript && !r.transcript.startsWith("【");
-  const flag = hasT ? '<span class="flag">✓ 已转写</span>' : "";
-  const cb = hasT ? "" : `<label class="cbwrap"><input type="checkbox" onchange="toggleSel('${r.aweme_id}', this.checked)">转写</label>`;
-  const cat = r.category ? `<span class="cat">${esc(r.category)}</span>` : "";
-  const summary = r.summary
-    ? `<div class="summary">${esc(r.summary)}<span class="toggle" onclick="copyText(this.dataset.s)" data-s="${esc(r.summary).replace(/"/g,"&quot;")}">复制</span></div>`
-    : "";
-  const tr = hasT
-    ? `<div class="transcript clamp" id="tr-${r.aweme_id}">${hl(r.transcript)}</div>
-       <span class="toggle" onclick="const el=document.getElementById('tr-${r.aweme_id}');el.classList.toggle('clamp');this.textContent=el.classList.contains('clamp')?'展开转写':'收起'">展开转写</span>`
-    : "";
-  const link = `https://www.douyin.com/video/${r.aweme_id}`;
-  return `<div class="card">
-    <div class="card-top">${cb}<h3>${hl(r.title)}</h3><div class="badges">${flag}${cat}</div></div>
-    <div class="meta"><span class="ava">${esc((r.author || "?").charAt(0).toUpperCase())}</span><span>${esc(r.author)}</span><a class="openlink" href="${link}" target="_blank">打开视频 ↗</a></div>
-    <div>${tagsOf(r.tags).map(t => `<span class="tag">#${hl(t)}</span>`).join("")}</div>
-    ${summary}${tr}
-  </div>`;
-}
-
-// ---------- 勾选按需转写 ----------
-const selected = new Set();
-function toggleSel(id, on) {
-  on ? selected.add(id) : selected.delete(id);
-  $("btnSel").textContent = `转写勾选 (${selected.size})`;
-  $("btnSel").disabled = selected.size === 0;
-}
-async function transcribeSelected() {
-  if (selected.size === 0) return;
-  const r = await fetch("/api/transcribe", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ids: [...selected] }),
-  });
-  if (r.ok) {
-    selected.clear(); $("btnSel").textContent = "转写勾选 (0)"; $("btnSel").disabled = true;
-    toast("已开始转写勾选的视频");
-    watchJob();
-  } else { const d = await r.json(); toast(d.detail, "err"); }
-}
-
-function copyText(s) {
-  navigator.clipboard.writeText(s).then(() => toast("已复制"), () => toast("复制失败", "err"));
-}
-
-// ---------- 分类筛选 ----------
-let curCat = "";
-let lastView = "library";
-async function loadCategories() {
-  const data = await (await fetch("/api/categories")).json();
-  const chips = data.counts.map(c =>
-    `<span class="chip${c.category === curCat ? " on" : ""}" onclick="pickCat('${esc(c.category)}')">${esc(c.category)}<b>${c.n}</b></span>`).join("");
-  const un = data.unclassified ? `<span class="chip" style="opacity:.6" onclick="pickCat('__none__')">未分类<b>${data.unclassified}</b></span>` : "";
-  $("catChips").innerHTML = `<span class="chip${curCat === "" ? " on" : ""}" onclick="pickCat('')">全部</span>${chips}${un}`;
-}
-function pickCat(c) { curCat = c; loadCategories(); loadLibrary(); }
-
-async function doSearch() {
-  const q = $("q").value.trim();
-  if (!q) return;
-  lastQuery = q; lastView = "search";
-  $("results").innerHTML = skeleton();
-  try {
-    const data = await (await fetch(`/api/videos?q=${encodeURIComponent(q)}`)).json();
-    $("results").innerHTML = data.hits.length
-      ? data.hits.map(card).join("")
-      : emptyBox("🔎", "没有命中。试试更短或别的关键词。");
-    $("searchNote").textContent = data.mode === "search" ? `命中 ${data.hits.length} 条` : "";
-  } catch (e) { $("results").innerHTML = emptyBox("⚠️", `请求失败：${esc(String(e))}`); }
-}
-
-async function loadLibrary() {
-  lastView = "library"; lastQuery = "";
-  $("results").innerHTML = skeleton();
-  const cat = curCat === "__none__" ? "__none__" : curCat;
-  const data = await (await fetch(`/api/videos?limit=30&category=${encodeURIComponent(cat)}`)).json();
-  $("results").innerHTML = data.hits.length
-    ? data.hits.map(card).join("")
-    : emptyBox("📭", "该分类下暂时没有视频。");
-  $("searchNote").textContent = curCat === "" ? "最近采集的 30 条" : `分类「${curCat === "__none__" ? "未分类" : curCat}」前 30 条`;
-}
-
-function agentToolLabel(tool) {
-  return ({
-    search_favorites: "搜索收藏",
-    search_semantic: "语义检索",
-    get_video: "读取视频",
-    transcribe_videos: "转写视频",
-    summarize_videos: "生成概要",
-    compare_videos: "准备比较材料",
-  })[tool] || tool;
-}
-
-function renderAgentSteps(steps) {
-  const statusIcon = { completed: "✓", waiting_approval: "!", failed: "×", rejected: "–" };
-  $("agentSteps").innerHTML = (steps || []).map(s => {
-    const cls = s.status === "completed" ? "done" : (s.status === "failed" || s.status === "rejected" ? "failed" : "waiting");
-    const label = s.type === "final" ? "整理最终回答" : (s.type === "plan" ? "制定任务计划" : (s.type === "replan" ? "调整任务计划" : agentToolLabel(s.tool)));
-    return `<div class="agent-step ${cls}"><span>${statusIcon[s.status] || "·"}</span><span>第 ${s.step} 步：${esc(label)}</span></div>`;
-  }).join("");
-}
-
-function renderAgentPlan(plan) {
-  const statusIcon = { completed: "✓", running: "→", waiting_approval: "!", failed: "×", skipped: "–", pending: "·" };
-  const rows = (plan || []).map(task => {
-    const cls = task.status === "completed" ? "done" : (task.status === "failed" ? "failed" : (task.status === "running" || task.status === "waiting_approval" ? "active" : ""));
-    return `<div class="agent-plan-row ${cls}"><span>${statusIcon[task.status] || "·"}</span><span>${esc(task.title)}${task.status === "pending" ? "（待执行）" : ""}</span></div>`;
-  }).join("");
-  $("agentPlan").innerHTML = rows ? `<div class="hint">任务计划</div>${rows}` : "";
-}
-
-function renderAgent(data) {
-  renderAgentPlan(data.plan || []);
-  renderAgentSteps(data.steps || []);
-  const approval = $("agentApproval");
-  const answer = $("answer");
-  if (data.status === "running") {
-    approval.innerHTML = "";
-    answer.innerHTML = `<div class="typing"><span class="dots"><i></i><i></i><i></i></span>Agent 正在研究你的收藏…</div>`;
-    return;
-  }
-  if ((data.status === "interrupted" || data.status === "paused")) {
-    approval.innerHTML = `<div class="agent-approval">
-      <h3>研究暂时中断</h3>
-      <p>${esc(data.error || "这次研究还没有完成，可以从最近一步继续。")}</p>
-      <div class="actions">
-        <button onclick="continueAgent('${esc(data.run_id)}')">继续研究</button>
-      </div>
-    </div>`;
-    answer.innerHTML = "";
-    return;
-  }
-  if (data.status === "waiting_approval" && data.pending_tool) {
-    const p = data.pending_tool;
-    const ids = p.args && Array.isArray(p.args.ids) ? `，涉及 ${p.args.ids.length} 个视频` : "";
-    approval.innerHTML = `<div class="agent-approval">
-      <h3>需要你的确认</h3>
-      <p>Agent 想要${esc(agentToolLabel(p.tool))}${ids}。${esc(p.reason || "这是一个会修改本地数据的操作。")}</p>
-      <div class="actions">
-        <button onclick="approveAgent('${esc(data.run_id)}', true)">批准这项操作</button>
-        <button class="ghost" onclick="approveAgent('${esc(data.run_id)}', false)">拒绝并结束</button>
-      </div>
-    </div>`;
-    answer.innerHTML = "";
-    return;
-  }
-  approval.innerHTML = "";
-  if (data.status === "completed") {
-    const src = (data.sources || []).map(s =>
-      `<div class="src">【${esc(s.title)}】 <a href="https://www.douyin.com/video/${encodeURIComponent(s.aweme_id)}" target="_blank" rel="noopener">↗</a></div>`).join("");
-    answer.innerHTML = `<div class="card"><div class="answer">${esc(data.answer)}<div class="agent-sources">${src || "未返回可追溯来源"}</div>
-      <span class="toggle" onclick="copyText(this.closest('.card').querySelector('.answer').textContent)">复制回答</span></div></div>`;
-  } else {
-    answer.innerHTML = emptyBox(data.status === "cancelled" ? "⏹" : "⚠️", esc(data.error || "Agent 未完成任务"));
-  }
-}
-
-let agentPoll = null;
-let agentPollRunId = null;
-let agentViewToken = 0;
-let agentSessionId = localStorage.getItem("agentSessionId") || "";
-let agentSessionTitle = "新建研究";
-
-function agentStatusLabel(status) {
-  return ({ completed: "已完成", waiting_approval: "等待确认", interrupted: "已中断", paused: "已暂停", failed: "失败", cancelled: "已取消" })[status] || "暂无运行";
-}
-
-function renderAgentSessions(items) {
-  const rows = (items || []).map(item => `<div class="agent-session-row${item.session_id === agentSessionId ? " active" : ""}"
-    data-session-id="${esc(item.session_id)}" data-run-id="${esc(item.latest_run_id || "")}" data-title="${esc(item.title || "新建研究")}"
-    onclick="openAgentSession(this.dataset.sessionId, this.dataset.runId, this.dataset.title)">
-    <div class="agent-session-copy"><b>${esc(item.title || "新建研究")}</b><span>${item.run_count} 次 · ${esc(agentStatusLabel(item.latest_status))}</span></div>
-    <button class="ghost" onclick="event.stopPropagation(); deleteAgentSession(this.closest('.agent-session-row').dataset.sessionId)">删除</button>
-  </div>`).join("");
-  $("agentSessions").innerHTML = rows || `<div class="hint">还没有研究会话</div>`;
-  const current = (items || []).find(item => item.session_id === agentSessionId);
-  if (current) {
-    agentSessionTitle = current.title || "新建研究";
-    $("agentSessionTitle").textContent = agentSessionTitle;
-  }
-}
-
-async function loadAgentSessions() {
-  try {
-    const data = await (await fetch("/api/agent/sessions?limit=20")).json();
-    renderAgentSessions(data.items || []);
-  } catch (e) { /* 会话列表失败不影响当前研究 */ }
-}
-
-async function openAgentSession(sessionId, runId, title) {
-  const viewToken = ++agentViewToken;
-  stopAgentWatch();
-  agentSessionId = sessionId;
-  agentSessionTitle = title || "新建研究";
-  localStorage.setItem("agentSessionId", sessionId);
-  localStorage.removeItem("agentRunId");
-  $("agentSessionTitle").textContent = agentSessionTitle;
-  if (!runId) { clearAgentWorkspace(); return; }
-  await openAgentRun(runId, viewToken);
-}
-
-async function openAgentRun(runId, viewToken = null) {
-  try {
-    const r = await fetch(`/api/agent/${encodeURIComponent(runId)}`);
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || "读取历史失败");
-    if (viewToken !== null && viewToken !== agentViewToken) return;
-    localStorage.setItem("agentRunId", runId);
-    agentSessionId = data.session_id || "";
-    localStorage.setItem("agentSessionId", agentSessionId);
-    renderAgent(data);
-    if (data.status === "running") {
-      $("btnAgentAsk").disabled = true; $("question").disabled = true;
-      watchAgent(runId);
-    } else {
-      stopAgentWatch();
-      setAgentInputLocked(!canAskAgent(data.status));
-    }
-  } catch (e) { toast(String(e), "err"); }
-}
-
-function setAgentInputLocked(locked) {
-  $("btnAgentAsk").disabled = locked;
-  $("question").disabled = locked;
-}
-
-function canAskAgent(status) {
-  return ["completed", "failed", "cancelled"].includes(status);
-}
-
-function stopAgentWatch() {
-  clearTimeout(agentPoll);
-  agentPoll = null;
-  agentPollRunId = null;
-}
-
-function clearAgentWorkspace() {
-  stopAgentWatch();
-  localStorage.removeItem("agentRunId");
-  $("agentSessionTitle").textContent = agentSessionTitle;
-  $("agentPlan").innerHTML = "";
-  $("agentSteps").innerHTML = "";
-  $("agentApproval").innerHTML = "";
-  $("answer").innerHTML = "";
-  $("question").value = "";
-}
-
-function newAgentSession() {
-  agentViewToken += 1;
-  agentSessionId = "";
-  agentSessionTitle = "新建研究";
-  localStorage.removeItem("agentSessionId");
-  clearAgentWorkspace();
-  setAgentInputLocked(false);
-  $("question").focus();
-  loadAgentSessions();
-}
-
-async function renameCurrentAgentSession() {
-  if (!agentSessionId) { toast("请先选择一个会话", "err"); return; }
-  const title = prompt("请输入会话名称", agentSessionTitle);
-  if (!title || !title.trim()) return;
-  const r = await fetch(`/api/agent/sessions/${encodeURIComponent(agentSessionId)}`, {
-    method: "PATCH", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title: title.trim() }),
-  });
-  if (!r.ok) { toast((await r.json()).detail || "重命名失败", "err"); return; }
-  agentSessionTitle = title.trim();
-  $("agentSessionTitle").textContent = agentSessionTitle;
-  loadAgentSessions();
-}
-
-async function deleteAgentSession(sessionId) {
-  if (!confirm("删除这个研究会话及其运行记录？此操作不可撤销。")) return;
-  const r = await fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
-  if (!r.ok) { toast((await r.json()).detail || "删除失败", "err"); return; }
-  if (sessionId === agentSessionId) newAgentSession();
-  else loadAgentSessions();
-}
-
-function deleteCurrentAgentSession() {
-  if (!agentSessionId) { toast("当前没有可删除的会话", "err"); return; }
-  deleteAgentSession(agentSessionId);
-}
-
-function watchAgent(runId) {
-  clearTimeout(agentPoll);
-  agentPollRunId = runId;
-  agentPoll = setTimeout(async () => {
-    try {
-      if (agentPollRunId !== runId || localStorage.getItem("agentRunId") !== runId) return;
-      const data = await (await fetch(`/api/agent/${encodeURIComponent(runId)}`)).json();
-      if (agentPollRunId !== runId || localStorage.getItem("agentRunId") !== runId) return;
-      renderAgent(data);
-      if (data.status === "running") watchAgent(runId);
-      else { stopAgentWatch(); setAgentInputLocked(!canAskAgent(data.status)); loadAgentSessions(); }
-    } catch (e) {
-      if (agentPollRunId !== runId || localStorage.getItem("agentRunId") !== runId) return;
-      $("answer").innerHTML = emptyBox("⚠️", `Agent 状态获取失败：${esc(String(e))}`);
-      setAgentInputLocked(false);
-    }
-  }, 700);
-}
-
-async function restoreLastAgent() {
-  const runId = localStorage.getItem("agentRunId");
-  if (!runId) return;
-  try {
-    const r = await fetch(`/api/agent/${encodeURIComponent(runId)}`);
-    if (!r.ok) throw new Error("not found");
-    const data = await r.json();
-    agentSessionId = data.session_id || agentSessionId;
-    if (agentSessionId) localStorage.setItem("agentSessionId", agentSessionId);
-    renderAgent(data);
-    if (data.status === "running") {
-      $("btnAgentAsk").disabled = true; $("question").disabled = true;
-      watchAgent(runId);
-    } else setAgentInputLocked(!canAskAgent(data.status));
-    loadAgentSessions();
-  } catch (e) {
-    localStorage.removeItem("agentRunId");
-  }
-}
-
-async function approveAgent(runId, approved) {
-  $("agentApproval").innerHTML = `<div class="typing">正在${approved ? "执行已批准的操作" : "结束任务"}…</div>`;
-  try {
-    const r = await fetch(`/api/agent/${encodeURIComponent(runId)}/approval`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ approved }),
-    });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || "确认失败");
-    renderAgent(data);
-    if (data.status === "running") watchAgent(runId);
-    else { stopAgentWatch(); setAgentInputLocked(!canAskAgent(data.status)); loadAgentSessions(); }
-  } catch (e) { toast(String(e), "err"); }
-}
-
-async function continueAgent(runId) {
-  $("agentApproval").innerHTML = `<div class="typing">正在恢复研究上下文…</div>`;
-  try {
-    const r = await fetch(`/api/agent/${encodeURIComponent(runId)}/continue`, { method: "POST" });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || "恢复失败");
-    $("btnAgentAsk").disabled = true; $("question").disabled = true;
-    renderAgent(data);
-    if (data.status === "running") watchAgent(runId);
-  } catch (e) {
-    toast(String(e), "err");
-    $("btnAgentAsk").disabled = false; $("question").disabled = false;
-  }
-}
-
-async function doAsk() {
-  const question = $("question").value.trim();
-  if (!question) return;
-  const viewToken = agentViewToken;
-  $("btnAgentAsk").disabled = true; $("question").disabled = true;
-  $("agentPlan").innerHTML = ""; $("agentSteps").innerHTML = ""; $("agentApproval").innerHTML = "";
-  $("answer").innerHTML = `<div class="typing"><span class="dots"><i></i><i></i><i></i></span>Agent 正在制定研究步骤…</div>`;
-  try {
-    const r = await fetch("/api/agent/ask", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, ...(agentSessionId ? { session_id: agentSessionId } : {}) }),
-    });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || "Agent 启动失败");
-    if (viewToken !== agentViewToken) return;
-    localStorage.setItem("agentRunId", data.run_id);
-    agentSessionId = data.session_id || "";
-    if (agentSessionId) localStorage.setItem("agentSessionId", agentSessionId);
-    if (!agentSessionTitle || agentSessionTitle === "新建研究") {
-      agentSessionTitle = question.slice(0, 40);
-      $("agentSessionTitle").textContent = agentSessionTitle;
-    }
-    renderAgent(data); watchAgent(data.run_id);
-  } catch (e) {
-    $("answer").innerHTML = emptyBox("⚠️", `Agent 启动失败：${esc(String(e))}`);
-    $("btnAgentAsk").disabled = false; $("question").disabled = false;
-  }
-}
-
-// ---------- 任务执行与轮询 ----------
-let polling = null;
-function setButtons(disabled) {
-  for (const id of ["btnTr", "btnTrAll", "btnSum", "btnSumAll", "btnCls", "btnReCls", "btnReIdx", "btnLogin", "btnCrawl"]) $(id).disabled = disabled;
-}
-function watchJob() {
-  setButtons(true);
-  $("barwrap").style.display = "block";
-  $("bar").style.width = "0%";
-  polling = setInterval(pollJob, 2000);
-  pollJob();
-}
-async function runJob(url, n, all) {
-  try {
-    const r = await fetch(url, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ n, all }),
-    });
-    if (!r.ok) { toast((await r.json()).detail, "err"); return; }
-    toast("任务已开始");
-  } catch (e) { toast("请求失败：" + e, "err"); return; }
-  watchJob();
-}
-
-async function pollJob() {
-  const j = await (await fetch("/api/job")).json();
-  const el = $("jobLine");
-  if (j.running) {
-    el.className = "job";
-    el.textContent = `⏳ ${j.name}：${j.progress}（已进行 ${fmtSecs(j.elapsed)}）`;
-    $("btnCancel").style.display = "inline-block";
-    if (j.total > 0) {
-      const pct = Math.round(j.done / j.total * 100);
-      $("bar").style.width = pct + "%";
-      $("bartext").textContent = `${j.done} / ${j.total}（${pct}%）`;
-    }
-  } else {
-    clearInterval(polling); polling = null;
-    setButtons(false);
-    $("btnCancel").style.display = "none";
-    $("barwrap").style.display = "none";
-    if (j.error) { el.className = "job err"; el.textContent = `✗ ${j.name} 失败：${j.error}`; toast(`${j.name} 失败`, "err"); }
-    else if (j.progress === "完成" || j.progress === "已取消") {
-      el.className = "job done"; el.textContent = `✓ ${j.name} ${j.progress}`;
-      toast(`${j.name} ${j.progress}`);
-      loadStats(); loadCategories();
-      if (lastView === "library") loadLibrary();
-    }
-    else { el.className = "job"; el.textContent = ""; }
-  }
-  renderHistory(j.history || []);
-}
-
-function fmtSecs(s) {
-  return s >= 60 ? `${Math.floor(s / 60)}分${s % 60}秒` : `${s}秒`;
-}
-function renderHistory(items) {
-  if (!items.length) { $("history").innerHTML = ""; return; }
-  const c = { "完成": "var(--ok)", "已取消": "var(--muted)", "失败": "var(--warn)", "已中断": "var(--warn)" };
-  const rows = items.map(h =>
-    `<div class="hrow"><span class="dot" style="background:${c[h.status] || "var(--muted)"}"></span>
-       <b style="color:${c[h.status] || "var(--muted)"}">${esc(h.status)}</b>｜${esc(h.name)}｜${h.done}/${h.total} 条｜${fmtSecs(h.seconds)}
-       <span class="del" onclick="delHistory(${h.id})" title="删除记录">✕</span></div>`).join("");
-  $("history").innerHTML = `<div class="hint" style="margin-bottom:6px">最近任务 <span class="toggle" onclick="clearHistory()">清空</span></div>${rows}`;
-}
-async function delHistory(id) {
-  await fetch(`/api/history/${id}`, { method: "DELETE" });
-  renderHistory((await (await fetch("/api/job")).json()).history || []);
-}
-async function clearHistory() {
-  await fetch("/api/history", { method: "DELETE" });
-  $("history").innerHTML = "";
-  toast("任务记录已清空");
-}
-
-async function cancelJob() {
-  try { await fetch("/api/cancel", { method: "POST" }); toast("已请求取消，等待当前条目结束", "err"); } catch {}
-}
-
-// ---------- 初始化 ----------
-loadStats();
-loadCategories();
-loadLibrary();
-restoreLastAgent();
-loadAgentSessions();
-// 区块标题点击收起/展开（含平滑动画）
-document.querySelectorAll(".label").forEach(l => l.onclick = () => l.parentElement.classList.toggle("collapsed"));
-// "命中 X 条"摘要行：点击只收起/展开结果列表
-$("searchNote").onclick = () => $("searchNote").parentElement.classList.toggle("results-hidden");
-// 快捷键：/ 聚焦搜索框（输入框内除外）
-document.addEventListener("keydown", e => {
-  if (e.key === "/" && document.activeElement.tagName !== "INPUT") { e.preventDefault(); $("q").focus(); }
-});
-// 页面刷新时若有任务正在跑，恢复轮询和按钮状态
-(async function resumeJobWatch() {
-  const j = await (await fetch("/api/job")).json();
-  if (j.running) {
-    setButtons(true);
-    $("barwrap").style.display = "block";
-    polling = setInterval(pollJob, 2000);
-    pollJob();
-  } else {
-    renderHistory(j.history || []);
-  }
-})();
-</script>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/static/app.js?v=4" defer></script>
 </body>
 </html>
+  <link rel="icon" href="data:,">
