@@ -9,22 +9,33 @@
 - **转写**：yt-dlp 即时下载音频（直链有时效，不提前囤）→ faster-whisper（CPU int8，本地推理）→ OpenCC 繁转简后入库
 - **AI 概要 / 问答**：基于已转写内容生成概要；提问时用本地 bge 句向量做**语义 + 关键词混合检索**（RRF 融合，向量在本地 ONNX 推理、不联网、零 API 成本），把命中的**相关片段/概要**而不是固定开头喂给 LLM，回答末尾标注来源视频
 - **自动分类**：LLM 先抽样浏览收藏内容、自动设计一套贴合的类别（6~12 个 + 兜底「其他」，存库复用），再批量归类；换台机器、换个收藏夹，类别会跟着内容变，不写死
-- **Web 界面**：单页应用，搜索高亮、分类筛选、勾选按需转写、任务进度条 + 取消 + 历史记录、一键转写/概要/分类
+- **Agent 研究**：不只是单次问答——LLM 作为控制器自主**拆分研究计划**（plan），按依赖顺序逐步调用工具（关键词搜索 / 语义检索 / 读取视频 / 比较观点），资料不足会自己调整计划，直到产出带引用来源的最终回答；**会修改数据的操作（转写、生成概要）会暂停等你批准**，随时可停止或从断点继续
+- **研究会话**：研究历史按会话保存（SQLite 持久化，服务重启不丢），支持多轮追问继承上下文、重命名、搜索会话；页面刷新自动恢复进行中的任务
+- **Web 界面**：三视图单页应用——Agent 研究（对话 + 实时执行轨迹/计划/引用）、收藏库（搜索高亮、分类筛选、勾选按需转写）、数据维护（同步/转写/概要/分类/重建索引，进度条 + 取消 + 历史记录）
 
 ## 项目结构
 
 ```
-├── main.py              # CLI 入口（login/crawl/search/transcribe/summarize/ask/web/stats）
+├── main.py              # CLI 入口（login/crawl/search/transcribe/summarize/ask/index/web/stats）
 ├── app/
 │   ├── crawler.py       # Playwright 登录 + 旁听接口采集（不逆向签名）
-│   ├── db.py            # SQLite + FTS5 层：建表/迁移/搜索/去重入库
+│   ├── db.py            # SQLite + FTS5 层：建表/迁移/搜索/Agent 会话与运行持久化
 │   ├── transcribe.py    # yt-dlp 下载音频 + faster-whisper 转写 + 繁转简
 │   ├── llm.py           # OpenAI 兼容客户端（DeepSeek 等），概要与问答
 │   ├── embedder.py      # 本地句向量 bge-small-zh-v1.5 ONNX（onnxruntime + tokenizers）
 │   ├── indexer.py       # 转写/概要/标题 → 分块 → 向量索引（内容签名增量更新）
 │   ├── retriever.py     # 语义 + 关键词混合召回（RRF 融合）→ 问答上下文
-│   └── web.py           # FastAPI 后端：搜索/问答/任务（进度/取消/历史）
-├── static/index.html    # 单页前端（原生 JS，无框架）
+│   ├── web.py           # FastAPI 后端：搜索/问答/Agent 任务/后台任务（进度/取消/历史）
+│   └── agent/           # Agent 决策循环
+│       ├── tools.py     # 工具层：Pydantic 参数校验 + 统一 ToolResult（写操作需审批）
+│       └── runtime.py   # 决策循环：plan/tool_call/final 三态 JSON 协议，可暂停/继续/取消
+├── static/              # 前端三件套（原生 JS，无框架）
+│   ├── index.html       # 页面结构（三视图：Agent 研究 / 收藏库 / 数据维护）
+│   ├── app.css          # 样式
+│   └── app.js           # 逻辑（会话管理、轮询、渲染）
+├── scripts/
+│   ├── download_model.py   # 预下载 Whisper / BGE 模型（hf-mirror 镜像）
+│   └── eval_agent.py       # Agent 离线评测脚本（注入假模型，不调 API）
 ├── data/                # favorites.db（SQLite 数据库）
 ├── browser_data/        # Playwright 登录态
 ├── models/              # 本地模型：faster-whisper-small + bge-small-zh-v1.5
@@ -106,6 +117,7 @@ python main.py stats
 - **混合检索（问 AI）**：`app/retriever.py` 把本地 bge 语义向量（float32 存进 SQLite BLOB，numpy 暴力余弦；语料千级下矩阵乘微秒级，故不引入 sqlite-vec）与 FTS 关键词两路结果用 **RRF** 融合。关键词路只搜「有效转写」、全词 AND 优先、bm25 列权重（标题 8 / 标签 3 / 作者 2 / 转写 1）；上下文取**命中片段**（向量命中的转写块，或问题词附近的窗口），不再固定取转写开头
 - **索引自愈**：每个视频存内容签名（sig），转写/概要更新只重嵌入该视频；`ask` 前自动检查补建，`meta.embed_model` 变化（换模型）触发全量重建；向量模型缺失时向量路静默跳过，问答退化为关键词检索，不会报错卡住
 - **即时下载转写**：视频直链有时效，转写时才用 yt-dlp + cookies 拉音频，失败重试 3 次（随机退避），仍失败标记「音频不可用」不阻塞队列
+- **Agent 决策循环**（`app/agent/`）：模型每步只输出一个 JSON 决策（`plan` / `tool_call` / `final`），非法 JSON 允许一次自动纠错；计划带依赖关系，未满足依赖的调用会被拒绝并要求重排；写类工具（转写/概要）默认拦截，经用户批准后才执行；每步快照落盘（`agent_runs` + `agent_events`），服务重启或超时后可从断点继续；视频内容一律视为数据而非指令，防提示注入
 - **协作式取消**：后台任务在条目间检查取消标志，已抓到的数据照常入库
 - **容错优先**：接口解析层全 `.get()` 容错，抖音字段改版只影响解析不影响整体
 
