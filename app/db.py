@@ -631,6 +631,9 @@ def recent_agent_sessions(limit: int = 20) -> list[dict]:
                       (SELECT r3.status FROM agent_runs AS r3
                        WHERE r3.session_id = s.id
                        ORDER BY r3.updated_at DESC, r3.rowid DESC LIMIT 1) AS latest_status
+                      ,(SELECT r4.question FROM agent_runs AS r4
+                        WHERE r4.session_id = s.id
+                        ORDER BY r4.updated_at DESC, r4.rowid DESC LIMIT 1) AS last_question
                FROM agent_sessions AS s
                LEFT JOIN agent_runs AS r ON r.session_id = s.id
                GROUP BY s.id
@@ -646,9 +649,60 @@ def recent_agent_sessions(limit: int = 20) -> list[dict]:
             "run_count": row["run_count"],
             "latest_run_id": row["latest_run_id"],
             "latest_status": row["latest_status"],
+            "last_question": row["last_question"] or "",
         }
         for row in rows
     ]
+
+
+def get_agent_session_detail(session_id: str) -> dict | None:
+    """返回一个会话及其全部运行轮次，供对话式工作区恢复完整线程。"""
+    with get_conn() as conn:
+        session = conn.execute(
+            "SELECT id, title, created_at, updated_at FROM agent_sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+        if session is None:
+            return None
+        rows = conn.execute(
+            """SELECT id, question, status, state_json, result_json, error,
+                      created_at, updated_at
+               FROM agent_runs WHERE session_id = ?
+               ORDER BY created_at ASC, rowid ASC""",
+            (session_id,),
+        ).fetchall()
+
+    runs = []
+    for row in rows:
+        try:
+            state = json.loads(row["state_json"]) if row["state_json"] else {}
+        except (TypeError, json.JSONDecodeError):
+            state = {}
+        try:
+            saved = json.loads(row["result_json"]) if row["result_json"] else {}
+        except (TypeError, json.JSONDecodeError):
+            saved = {}
+        runs.append({
+            "run_id": row["id"],
+            "question": row["question"],
+            "status": row["status"],
+            "answer": saved.get("answer", state.get("answer", "")),
+            "citations": saved.get("citations", []),
+            "sources": saved.get("sources", state.get("sources", [])),
+            "plan": state.get("plan", saved.get("plan", [])),
+            "steps": state.get("steps", saved.get("steps", [])),
+            "pending_tool": state.get("pending_tool", saved.get("pending_tool")),
+            "error": row["error"] or saved.get("error") or state.get("error"),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        })
+    return {
+        "session_id": session["id"],
+        "title": session["title"],
+        "created_at": session["created_at"],
+        "updated_at": session["updated_at"],
+        "runs": runs,
+    }
 
 
 def rename_agent_session(session_id: str, title: str) -> bool:
