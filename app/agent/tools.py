@@ -206,6 +206,14 @@ class ToolRegistry:
     def __init__(self, specs: list[ToolSpec]):
         self._specs = {spec.name: spec for spec in specs}
 
+    @staticmethod
+    def _normalize_args(raw_args: dict) -> dict:
+        """兼容模型常见的同义参数名，避免拼写差异导致调用被校验拒绝。"""
+        args = dict(raw_args)
+        if "aweme_ids" in args and "ids" not in args:
+            args["ids"] = args.pop("aweme_ids")
+        return args
+
     def list(self) -> list[ToolSpec]:
         return list(self._specs.values())
 
@@ -228,6 +236,7 @@ class ToolRegistry:
             }
         if not isinstance(raw_args, dict):
             return _error("invalid_arguments", "工具参数必须是 JSON 对象")
+        raw_args = self._normalize_args(raw_args)
         try:
             args = spec.args_model.model_validate(raw_args)
         except AttributeError:  # Pydantic v1 compatibility

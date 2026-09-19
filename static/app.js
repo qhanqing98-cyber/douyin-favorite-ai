@@ -8,6 +8,8 @@ const state = {
   activeRunId: localStorage.getItem("agentRunId") || "",
   sessionToken: 0,
   agentPoll: null,
+  agentStream: null,
+  streamFrame: null,
   jobPoll: null,
   selectedVideos: new Set(),
   category: "",
@@ -101,6 +103,10 @@ function canAskAgent(status) {
 function stopAgentWatch() {
   clearTimeout(state.agentPoll);
   state.agentPoll = null;
+  if (state.agentStream) state.agentStream.close();
+  state.agentStream = null;
+  if (state.streamFrame) cancelAnimationFrame(state.streamFrame);
+  state.streamFrame = null;
 }
 
 function renderSessions() {
@@ -149,6 +155,9 @@ function emptyConversation() {
 
 function runAnswerHtml(run) {
   if (run.status === "running") {
+    if (run.answer) {
+      return `<div class="streaming-answer">${esc(run.answer)}<span class="stream-caret" aria-hidden="true"></span></div>`;
+    }
     return `<div class="typing"><span class="typing-dots"><i></i><i></i><i></i></span><span>正在研究收藏并整理证据…</span></div>`;
   }
   if (run.status === "waiting_approval") return `<div class="typing">执行暂停，等待你的确认。</div>`;
@@ -371,8 +380,15 @@ function mergeRun(run) {
   localStorage.setItem("agentRunId", run.run_id);
 }
 
-function watchAgent(runId, sessionId = state.sessionId) {
-  stopAgentWatch();
+function scheduleStreamRender() {
+  if (state.streamFrame) return;
+  state.streamFrame = requestAnimationFrame(() => {
+    state.streamFrame = null;
+    renderConversation();
+  });
+}
+
+function pollAgent(runId, sessionId = state.sessionId) {
   state.agentPoll = setTimeout(async () => {
     if (sessionId !== state.sessionId || runId !== state.activeRunId) return;
     try {
@@ -380,13 +396,54 @@ function watchAgent(runId, sessionId = state.sessionId) {
       if (sessionId !== state.sessionId || runId !== state.activeRunId) return;
       mergeRun(run);
       renderAgentWorkspace();
-      if (run.status === "running") watchAgent(runId, sessionId);
+      if (run.status === "running") pollAgent(runId, sessionId);
       else await loadAgentSessions();
     } catch (error) {
       toast(`无法更新研究状态：${error.message}`, "error");
       setComposerState(null);
     }
   }, 700);
+}
+
+function watchAgent(runId, sessionId = state.sessionId) {
+  stopAgentWatch();
+  if (!("EventSource" in window)) {
+    pollAgent(runId, sessionId);
+    return;
+  }
+  const stream = new EventSource(`/api/agent/${encodeURIComponent(runId)}/stream`);
+  state.agentStream = stream;
+  stream.onmessage = async event => {
+    if (sessionId !== state.sessionId || runId !== state.activeRunId) {
+      stopAgentWatch();
+      return;
+    }
+    let payload;
+    try { payload = JSON.parse(event.data); }
+    catch { return; }
+    if (payload.type === "text_delta") {
+      const run = latestRun();
+      if (!run || run.run_id !== runId) return;
+      run.answer = `${run.answer || ""}${payload.delta || ""}`;
+      run.status = "running";
+      scheduleStreamRender();
+      return;
+    }
+    if (payload.run) {
+      mergeRun(payload.run);
+      renderAgentWorkspace();
+    }
+    if (payload.type === "done") {
+      stopAgentWatch();
+      await loadAgentSessions();
+    }
+  };
+  stream.onerror = () => {
+    if (state.agentStream !== stream) return;
+    stream.close();
+    state.agentStream = null;
+    pollAgent(runId, sessionId);
+  };
 }
 
 async function askAgent(event) {

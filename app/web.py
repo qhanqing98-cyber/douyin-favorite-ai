@@ -5,13 +5,14 @@
 同一时刻只允许一个任务，防止 Whisper 把内存打爆。
 """
 import json
+import queue
 import threading
 import time
 import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -126,6 +127,26 @@ def _checkpoint_agent(run_id: str, execution: AgentExecution) -> None:
         db.add_agent_event(run_id, int(step["step"]), "step", step)
 
 
+def _emit_agent_event(record: dict, event: dict) -> None:
+    """把事件广播给当前 SSE 订阅者；没有订阅者时 Agent 仍继续运行。"""
+    with record["lock"]:
+        subscribers = list(record.get("subscribers", ()))
+    for subscriber in subscribers:
+        subscriber.put(event)
+
+
+def _agent_changed(run_id: str, record: dict, execution: AgentExecution) -> None:
+    _checkpoint_agent(run_id, execution)
+    _emit_agent_event(record, {"type": "snapshot", "run": _agent_payload(run_id, record)})
+
+
+def _agent_text_delta(run_id: str, record: dict, delta: str, answer: str) -> None:
+    _emit_agent_event(record, {
+        "type": "text_delta", "run_id": run_id, "delta": delta,
+        "answer_length": len(answer),
+    })
+
+
 def _load_agent_record(run_id: str) -> dict | None:
     """进程重启后从数据库恢复一次 Agent 执行。"""
     row = db.get_agent_run(run_id)
@@ -143,7 +164,8 @@ def _load_agent_record(run_id: str) -> dict | None:
         "status": row["status"],
         "session_id": row["session_id"],
         "error": row["error"],
-        "lock": threading.Lock(),
+        "lock": threading.RLock(),
+        "subscribers": set(),
         "created_at": row["created_at"],
     }
 
@@ -156,10 +178,13 @@ def _agent_payload(run_id: str, record: dict) -> dict:
                 "run_id": run_id,
                 "session_id": record.get("session_id"),
                 "question": record["execution"].question,
-                "status": record["status"],
+                "status": record["execution"].status,
                 "error": record.get("error") or record["execution"].error,
+                "answer": record["execution"].answer,
+                "sources": record["execution"].sources,
                 "plan": record["execution"].plan,
                 "steps": record["execution"].steps,
+                "pending_tool": record["execution"].pending_tool,
             }
         return {
             "run_id": run_id,
@@ -178,6 +203,7 @@ def _run_agent(run_id: str, record: dict) -> None:
         record["result"] = result
         record["status"] = result.status
     _persist_agent_record(run_id, record, result)
+    _emit_agent_event(record, {"type": "done", "run": _agent_payload(run_id, record)})
 
 
 @app.post("/api/agent/ask")
@@ -210,10 +236,14 @@ def agent_ask(req: AgentAskReq):
         "result": None,
         "status": "running",
         "session_id": session_id,
-        "lock": threading.Lock(),
+        "lock": threading.RLock(),
+        "subscribers": set(),
         "created_at": time.time(),
     }
-    execution.on_change = lambda current: _checkpoint_agent(run_id, current)
+    execution.on_change = lambda current: _agent_changed(run_id, record, current)
+    execution.on_text_delta = lambda delta, answer: _agent_text_delta(
+        run_id, record, delta, answer,
+    )
     with _agent_lock:
         _agent_runs[run_id] = record
         # 本地单用户只保留最近 20 次；正在运行或等待确认的任务不清理。
@@ -267,6 +297,46 @@ def agent_session_delete(session_id: str):
     return {"ok": True, "session_id": session_id}
 
 
+@app.get("/api/agent/{run_id}/stream")
+def agent_stream(run_id: str):
+    """SSE：推送执行快照和最终回答增量；客户端断开不会取消任务。"""
+    record = _agent_runs.get(run_id)
+    if record is None:
+        record = _load_agent_record(run_id)
+        if record is None:
+            raise HTTPException(404, "Agent 任务不存在或已过期")
+        with _agent_lock:
+            _agent_runs[run_id] = record
+
+    subscriber: queue.Queue = queue.Queue()
+
+    def events():
+        with record["lock"]:
+            record["subscribers"].add(subscriber)
+        try:
+            initial = _agent_payload(run_id, record)
+            yield f"data: {json.dumps({'type': 'snapshot', 'run': initial}, ensure_ascii=False)}\n\n"
+            if initial["status"] not in {"running"}:
+                return
+            while True:
+                try:
+                    event = subscriber.get(timeout=15)
+                except queue.Empty:
+                    yield ": keep-alive\n\n"
+                    continue
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                if event.get("type") == "done":
+                    return
+        finally:
+            with record["lock"]:
+                record["subscribers"].discard(subscriber)
+
+    return StreamingResponse(
+        events(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/api/agent/{run_id}")
 def agent_status(run_id: str):
     record = _agent_runs.get(run_id)
@@ -291,10 +361,18 @@ def agent_approval(run_id: str, req: AgentApprovalReq):
     with record["lock"]:
         if record["status"] != "waiting_approval":
             raise HTTPException(409, "当前 Agent 没有等待批准的操作")
-        result = record["execution"].approve(req.approved)
+        record["execution"].on_change = lambda current: _agent_changed(run_id, record, current)
+        record["execution"].on_text_delta = lambda delta, answer: _agent_text_delta(
+            run_id, record, delta, answer,
+        )
+        result = record["execution"].approve(req.approved, continue_run=False)
         record["result"] = result
         record["status"] = result.status
     _persist_agent_record(run_id, record, result)
+    if result.status == "running":
+        with record["lock"]:
+            record["result"] = None
+        threading.Thread(target=_run_agent, args=(run_id, record), daemon=True).start()
     return _agent_payload(run_id, record)
 
 
@@ -311,7 +389,10 @@ def agent_continue(run_id: str):
     with record["lock"]:
         if record["status"] not in {"interrupted", "paused"}:
             raise HTTPException(409, "当前 Agent 不需要继续执行")
-        record["execution"].on_change = lambda current: _checkpoint_agent(run_id, current)
+        record["execution"].on_change = lambda current: _agent_changed(run_id, record, current)
+        record["execution"].on_text_delta = lambda delta, answer: _agent_text_delta(
+            run_id, record, delta, answer,
+        )
         record["execution"].status = "running"
         record["execution"].error = None
         record["result"] = None
