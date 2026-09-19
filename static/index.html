@@ -1,19 +1,20 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="color-scheme" content="light">
+  <meta name="color-scheme" content="dark">
   <title>浮光 · 抖音收藏研究台</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/static/app.css?v=4">
+  <link rel="stylesheet" href="/static/app.css?v=5">
 </head>
 <body>
   <a class="skip-link" href="#mainContent">跳到主要内容</a>
+
   <div class="app-shell">
     <aside class="sidebar" id="appSidebar" aria-label="应用导航">
       <div class="brand-row">
-        <div class="brand-mark" aria-hidden="true">浮</div>
+        <div class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></div>
         <div>
           <div class="brand-name">浮光</div>
           <div class="brand-subtitle">收藏研究台</div>
@@ -21,23 +22,24 @@
         <button class="icon-button sidebar-close" id="sidebarClose" aria-label="关闭导航">×</button>
       </div>
 
-      <button class="new-session-button" id="newSessionButton">
-        <span aria-hidden="true">＋</span><span>新建研究</span>
-      </button>
+      <section class="sidebar-card">
+        <div class="profile-orbit" aria-hidden="true"><span>浮</span></div>
+        <p class="sidebar-kicker">PRIVATE RESEARCH SPACE</p>
+        <h2>让收藏变成答案</h2>
+        <p class="sidebar-copy">把散落的视频、转写和观点，组织成可以继续追问的研究。</p>
 
-      <nav class="primary-nav" aria-label="主要功能">
-        <button class="nav-item active" data-view="agent" aria-current="page">
-          <span class="nav-icon" aria-hidden="true">✦</span><span>Agent 研究</span>
+        <button class="new-session-button" id="newSessionButton">
+          <span>新建研究</span><span aria-hidden="true">↗</span>
         </button>
-        <button class="nav-item" data-view="library">
-          <span class="nav-icon" aria-hidden="true">⌕</span><span>收藏库</span>
-        </button>
-        <button class="nav-item" data-view="maintenance">
-          <span class="nav-icon" aria-hidden="true">⌁</span><span>数据维护</span>
-        </button>
-      </nav>
 
-      <div class="session-section">
+        <div class="library-stats" aria-label="收藏库统计">
+          <div><strong id="stTotal">—</strong><span>收藏</span></div>
+          <div><strong id="stTr">—</strong><span>转写</span></div>
+          <div><strong id="stSum">—</strong><span>概要</span></div>
+        </div>
+      </section>
+
+      <section class="session-section">
         <div class="section-caption">
           <span>研究会话</span><span id="sessionCount">0</span>
         </div>
@@ -46,18 +48,21 @@
           <input id="sessionSearch" type="search" placeholder="搜索会话" aria-label="搜索研究会话">
         </label>
         <div class="session-list" id="agentSessions" role="list"></div>
-      </div>
-
-      <div class="library-stats" aria-label="收藏库统计">
-        <div><strong id="stTotal">–</strong><span>收藏</span></div>
-        <div><strong id="stTr">–</strong><span>转写</span></div>
-        <div><strong id="stSum">–</strong><span>概要</span></div>
-      </div>
+      </section>
     </aside>
 
     <button class="sidebar-backdrop" id="sidebarBackdrop" aria-label="关闭导航"></button>
 
     <div class="workspace">
+      <header class="desktop-topbar">
+        <nav class="primary-nav" aria-label="主要功能">
+          <button class="nav-item active" data-view="agent" aria-current="page"><span aria-hidden="true">◉</span><span>Agent 研究</span></button>
+          <button class="nav-item" data-view="library"><span aria-hidden="true">▧</span><span>收藏库</span></button>
+          <button class="nav-item" data-view="maintenance"><span aria-hidden="true">⌁</span><span>数据维护</span></button>
+        </nav>
+        <div class="topbar-status"><span class="pulse-dot"></span>本地知识库</div>
+      </header>
+
       <header class="mobile-bar">
         <button class="icon-button" id="sidebarOpen" aria-label="打开导航">☰</button>
         <span>浮光 · 收藏研究台</span>
@@ -87,106 +92,50 @@
                 <textarea id="question" rows="1" placeholder="继续追问，或开始一个新的研究主题…"></textarea>
                 <div class="composer-footer">
                   <span>Enter 发送 · Shift + Enter 换行</span>
-                  <button class="send-button" id="btnAgentAsk" type="submit">
-                    <span>发送</span><span aria-hidden="true">↑</span>
-                  </button>
+                  <button class="send-button" id="btnAgentAsk" type="submit"><span>发送</span><span aria-hidden="true">↗</span></button>
                 </div>
               </form>
             </section>
 
             <aside class="agent-inspector" id="agentInspector" aria-label="Agent 执行详情">
               <div class="inspector-head">
-                <div>
-                  <span class="eyebrow">LIVE TRACE</span>
-                  <h2>执行详情</h2>
-                </div>
+                <div><span class="eyebrow">LIVE TRACE</span><h2>执行详情</h2></div>
                 <button class="icon-button inspector-close" id="inspectorClose" aria-label="关闭执行详情">×</button>
               </div>
               <div class="run-status" id="agentRunStatus">等待任务</div>
-              <section class="inspector-block">
-                <h3>任务计划</h3>
-                <div id="agentPlan" class="agent-plan"></div>
-              </section>
-              <section class="inspector-block">
-                <h3>执行轨迹</h3>
-                <div id="agentSteps" class="agent-steps"></div>
-              </section>
-              <section class="inspector-block">
-                <h3>引用来源</h3>
-                <div id="agentSources" class="agent-sources"></div>
-              </section>
+              <section class="inspector-block"><h3>任务计划</h3><div id="agentPlan" class="agent-plan"></div></section>
+              <section class="inspector-block"><h3>执行轨迹</h3><div id="agentSteps" class="agent-steps"></div></section>
+              <section class="inspector-block"><h3>引用来源</h3><div id="agentSources" class="agent-sources"></div></section>
             </aside>
           </div>
         </section>
 
         <section class="app-view" id="viewLibrary" data-view-panel="library">
           <header class="view-header">
-            <div>
-              <div class="eyebrow">KNOWLEDGE LIBRARY</div>
-              <h1>收藏库</h1>
-              <p>搜索标题、标签、作者和转写内容。</p>
-            </div>
+            <div><div class="eyebrow">KNOWLEDGE LIBRARY</div><h1>收藏库</h1><p>搜索标题、标签、作者和转写内容。</p></div>
           </header>
           <form class="search-toolbar" id="librarySearchForm">
-            <label class="search-field">
-              <span aria-hidden="true">⌕</span>
-              <input type="search" id="q" placeholder="输入关键词或一句话…">
-            </label>
+            <label class="search-field"><span aria-hidden="true">⌕</span><input type="search" id="q" placeholder="输入关键词或一句话…"></label>
             <button type="submit">搜索收藏</button>
             <button type="button" class="secondary-button" id="showLibraryButton">最近收藏</button>
           </form>
-          <div class="filter-row">
-            <div class="chips" id="catChips"></div>
-            <button class="secondary-button compact" id="btnSel" disabled>转写勾选 · 0</button>
-          </div>
+          <div class="filter-row"><div class="chips" id="catChips"></div><button class="secondary-button compact" id="btnSel" disabled>转写勾选 · 0</button></div>
           <div class="result-summary" id="searchNote"></div>
           <div class="library-results" id="results"></div>
         </section>
 
         <section class="app-view" id="viewMaintenance" data-view-panel="maintenance">
           <header class="view-header">
-            <div>
-              <div class="eyebrow">DATA OPERATIONS</div>
-              <h1>数据维护</h1>
-              <p>同步、转写、概要、分类和索引任务都在这里运行。</p>
-            </div>
+            <div><div class="eyebrow">DATA OPERATIONS</div><h1>数据维护</h1><p>同步、转写、概要、分类和索引任务都在这里运行。</p></div>
           </header>
-
           <div class="operation-grid">
-            <article class="operation-group">
-              <span class="operation-index">01</span>
-              <div><h2>同步来源</h2><p>登录抖音并获取最新收藏。</p></div>
-              <div class="operation-actions">
-                <button class="secondary-button" id="btnLogin">扫码登录</button>
-                <button id="btnCrawl">同步收藏夹</button>
-              </div>
-            </article>
-            <article class="operation-group">
-              <span class="operation-index">02</span>
-              <div><h2>补全内容</h2><p>生成可检索的转写和概要。</p></div>
-              <div class="operation-actions">
-                <button class="secondary-button" id="btnTr">转写 10 条</button>
-                <button id="btnTrAll">转写全部</button>
-                <button class="secondary-button" id="btnSum">概要 10 条</button>
-                <button id="btnSumAll">概要全部</button>
-              </div>
-            </article>
-            <article class="operation-group">
-              <span class="operation-index">03</span>
-              <div><h2>整理知识</h2><p>分类收藏并维护语义索引。</p></div>
-              <div class="operation-actions">
-                <button id="btnCls">分类未整理内容</button>
-                <button class="secondary-button" id="btnReCls">重新分类全部</button>
-                <button class="secondary-button" id="btnReIdx">重建语义索引</button>
-              </div>
-            </article>
+            <article class="operation-group"><span class="operation-index">01</span><div><h2>同步来源</h2><p>登录抖音并获取最新收藏。</p></div><div class="operation-actions"><button class="secondary-button" id="btnLogin">扫码登录</button><button id="btnCrawl">同步收藏夹</button></div></article>
+            <article class="operation-group"><span class="operation-index">02</span><div><h2>补全内容</h2><p>生成可检索的转写和概要。</p></div><div class="operation-actions"><button class="secondary-button" id="btnTr">转写 10 条</button><button id="btnTrAll">转写全部</button><button class="secondary-button" id="btnSum">概要 10 条</button><button id="btnSumAll">概要全部</button></div></article>
+            <article class="operation-group"><span class="operation-index">03</span><div><h2>整理知识</h2><p>分类收藏并维护语义索引。</p></div><div class="operation-actions"><button id="btnCls">分类未整理内容</button><button class="secondary-button" id="btnReCls">重新分类全部</button><button class="secondary-button" id="btnReIdx">重建语义索引</button></div></article>
           </div>
-
           <section class="job-console">
             <div class="console-head"><h2>后台任务</h2><span id="jobState">空闲</span></div>
-            <div class="barwrap" id="barwrap" hidden>
-              <div class="bar" id="bar"></div><span class="bartext" id="bartext"></span>
-            </div>
+            <div class="barwrap" id="barwrap" hidden><div class="bar" id="bar"></div><span class="bartext" id="bartext"></span></div>
             <div class="job" id="jobLine">当前没有运行中的任务。</div>
             <button class="danger-button compact" id="btnCancel" hidden>取消当前任务</button>
             <div class="history" id="history"></div>
@@ -197,6 +146,6 @@
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="/static/app.js?v=4" defer></script>
+  <script src="/static/app.js?v=5" defer></script>
 </body>
 </html>
