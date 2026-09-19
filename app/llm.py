@@ -8,6 +8,7 @@
 """
 import os
 from pathlib import Path
+from typing import Callable
 
 from openai import OpenAI
 
@@ -56,6 +57,25 @@ def _chat(messages: list[dict], max_tokens: int = 1500) -> str:
         model=_model(), messages=messages, max_tokens=max_tokens, temperature=0.3
     )
     return resp.choices[0].message.content.strip()
+
+
+def _chat_stream(messages: list[dict], on_delta: Callable[[str], None],
+                 max_tokens: int = 1500) -> str:
+    """流式读取 OpenAI 兼容接口，同时返回完整文本供上层解析与持久化。"""
+    stream = _get_client().chat.completions.create(
+        model=_model(), messages=messages, max_tokens=max_tokens,
+        temperature=0.3, stream=True,
+    )
+    parts: list[str] = []
+    for chunk in stream:
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta.content or ""
+        if not delta:
+            continue
+        parts.append(delta)
+        on_delta(delta)
+    return "".join(parts).strip()
 
 
 def summarize(title: str, author: str, transcript: str) -> str:

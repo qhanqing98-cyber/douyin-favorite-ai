@@ -254,6 +254,12 @@ main { min-height: 0; }
 .typing-dots i:nth-child(2) { animation-delay: .14s; }
 .typing-dots i:nth-child(3) { animation-delay: .28s; }
 @keyframes dot { to { transform: translateY(-4px); opacity: .45; } }
+.streaming-answer { white-space: pre-wrap; }
+.stream-caret {
+  display: inline-block; width: 7px; height: 1.05em; margin-left: 3px;
+  vertical-align: -.16em; background: var(--accent); animation: caret 900ms steps(1) infinite;
+}
+@keyframes caret { 50% { opacity: 0; } }
 .message-error { padding: 10px 12px; border: 1px solid oklch(65% .18 28 / .35); border-radius: 12px; color: oklch(79% .11 28); background: oklch(35% .08 28 / .2); }
 
 .composer { margin: 0 18px 18px; padding: 12px 14px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--bg-deep); box-shadow: var(--shadow-in); }

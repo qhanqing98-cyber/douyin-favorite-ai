@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal
@@ -131,15 +132,66 @@ def _parse_decision(text: str) -> ToolCallDecision | PlanDecision | FinalDecisio
     raise DecisionError("模型决策 type 必须是 tool_call 或 final")
 
 
+def _partial_json_string_field(text: str, field: str) -> str | None:
+    """从尚未闭合的 JSON 中安全提取字符串字段，供模型 token 流实时展示。"""
+    match = re.search(rf'"{re.escape(field)}"\s*:\s*"', text)
+    if not match:
+        return None
+    index = match.end()
+    chars: list[str] = []
+    escapes = {'"': '"', "\\": "\\", "/": "/", "b": "\b",
+               "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
+    while index < len(text):
+        char = text[index]
+        if char == '"':
+            return "".join(chars)
+        if char != "\\":
+            chars.append(char)
+            index += 1
+            continue
+        if index + 1 >= len(text):
+            break
+        escaped = text[index + 1]
+        if escaped == "u":
+            if index + 6 > len(text):
+                break
+            codepoint = text[index + 2:index + 6]
+            try:
+                chars.append(chr(int(codepoint, 16)))
+            except ValueError:
+                break
+            index += 6
+            continue
+        if escaped not in escapes:
+            break
+        chars.append(escapes[escaped])
+        index += 2
+    return "".join(chars)
+
+
+def _args_hint(spec) -> str:
+    """把工具参数压成 `name:type,...` 的紧凑提示，必填不带标记、可选加 ?。"""
+    parameters = spec.schema()["function"]["parameters"]
+    required = set(parameters.get("required", []))
+    hints = []
+    for name, prop in parameters.get("properties", {}).items():
+        kind = prop.get("type", "any")
+        if kind == "array":
+            items = prop.get("items", {}).get("type", "")
+            kind = f"array<{items}>" if items else "array"
+        hints.append(f"{name}{'' if name in required else '?'}:{kind}")
+    return ",".join(hints)
+
+
 def _system_prompt(registry: ToolRegistry) -> str:
     tools = "\n".join(
-        f"- {spec.name}: {spec.description}；副作用={spec.side_effect}"
+        f"- {spec.name}({_args_hint(spec)}): {spec.description}；副作用={spec.side_effect}"
         for spec in registry.list()
     )
     return (
         "你是一个抖音收藏知识库研究 Agent 的控制器。\n"
         "你的任务是逐步选择工具，直到可以基于真实资料回答用户。\n\n"
-        "可用工具：\n" + tools + "\n\n"
+        "可用工具（括号内是参数名和类型，调用时必须使用这些参数名）：\n" + tools + "\n\n"
         "每次只能输出一个 JSON 对象，不要输出 Markdown 或解释文字。\n"
         '调用工具格式：{"type":"tool_call","tool":"工具名","args":{},"reason":"原因"}\n'
         '计划格式：{"type":"plan","tasks":[{"id":"search","title":"检索相关收藏","depends_on":[]}]}\n'
@@ -159,9 +211,11 @@ class AgentExecution:
     """一次可暂停/批准/继续的 Agent 执行。"""
 
     def __init__(self, runtime: "AgentRuntime", question: str,
-                 on_change: Callable[["AgentExecution"], None] | None = None):
+                 on_change: Callable[["AgentExecution"], None] | None = None,
+                 on_text_delta: Callable[[str, str], None] | None = None):
         self.runtime = runtime
         self.on_change = on_change
+        self.on_text_delta = on_text_delta
         self.question = question.strip()
         self.messages = [
             {"role": "system", "content": _system_prompt(runtime.registry)},
@@ -313,7 +367,9 @@ class AgentExecution:
                 return self._result()
             self.step_no += 1
             try:
-                decision, raw = self.runtime._next_decision(self.messages)
+                decision, raw = self.runtime._next_decision(
+                    self.messages, self._accept_answer_delta,
+                )
             except DecisionError as exc:
                 self.status = "failed"
                 self.error = str(exc)
@@ -438,7 +494,13 @@ class AgentExecution:
         self._checkpoint()
         return self._result()
 
-    def approve(self, approved: bool) -> AgentResult:
+    def _accept_answer_delta(self, delta: str, answer: str) -> None:
+        """更新内存中的部分答案；高频 token 不逐个写 SQLite。"""
+        self.answer = answer
+        if self.on_text_delta:
+            self.on_text_delta(delta, answer)
+
+    def approve(self, approved: bool, *, continue_run: bool = True) -> AgentResult:
         """批准或拒绝当前待执行的写工具；批准后继续原上下文。"""
         if self.status != "waiting_approval" or not self.pending_tool:
             return AgentResult(status="failed", error="当前没有待批准操作")
@@ -460,7 +522,7 @@ class AgentExecution:
         self.pending_tool = None
         self.status = "running"
         self._checkpoint()
-        return self.advance()
+        return self.advance() if continue_run else self._result()
 
     def cancel(self) -> AgentResult:
         """取消当前执行，不执行待批准工具。"""
@@ -475,6 +537,7 @@ class AgentRuntime:
     """可注入模型函数的最小 Agent Runtime，便于离线测试。"""
 
     def __init__(self, chat: Callable[..., str] | None = None,
+                 stream_chat: Callable[..., str] | None = None,
                  registry: ToolRegistry = TOOLS, max_steps: int = MAX_STEPS,
                  timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
                  max_tool_retries: int = MAX_TOOL_RETRIES):
@@ -489,6 +552,9 @@ class AgentRuntime:
         self.timeout_seconds = timeout_seconds
         self.max_tool_retries = max_tool_retries
         self._chat = chat or self._default_chat
+        self._stream_chat = stream_chat if stream_chat is not None else (
+            self._default_stream_chat if chat is None else None
+        )
 
     @staticmethod
     def _default_chat(messages: list[dict], max_tokens: int = MAX_MODEL_TOKENS) -> str:
@@ -496,9 +562,18 @@ class AgentRuntime:
 
         return llm._chat(messages, max_tokens=max_tokens)
 
-    def _next_decision(self, messages: list[dict]) -> tuple[ToolCallDecision | FinalDecision, str]:
+    @staticmethod
+    def _default_stream_chat(messages: list[dict], on_delta: Callable[[str], None],
+                             max_tokens: int = MAX_MODEL_TOKENS) -> str:
+        from app import llm
+
+        return llm._chat_stream(messages, on_delta, max_tokens=max_tokens)
+
+    def _next_decision(self, messages: list[dict],
+                       on_answer_delta: Callable[[str, str], None] | None = None
+                       ) -> tuple[ToolCallDecision | FinalDecision, str]:
         """请求一次决策；非法 JSON 允许一次纠错重试。"""
-        raw = self._chat(messages, max_tokens=MAX_MODEL_TOKENS)
+        raw = self._request_decision(messages, on_answer_delta)
         try:
             return _parse_decision(raw), raw
         except DecisionError as first_error:
@@ -508,8 +583,33 @@ class AgentRuntime:
             )
             retry_messages = [*messages, {"role": "assistant", "content": raw},
                               {"role": "user", "content": repair}]
-            retry_raw = self._chat(retry_messages, max_tokens=MAX_MODEL_TOKENS)
+            retry_raw = self._request_decision(retry_messages, on_answer_delta)
             return _parse_decision(retry_raw), retry_raw
+
+    def _request_decision(self, messages: list[dict],
+                          on_answer_delta: Callable[[str, str], None] | None) -> str:
+        if self._stream_chat is None:
+            return self._chat(messages, max_tokens=MAX_MODEL_TOKENS)
+
+        raw_parts: list[str] = []
+        emitted = ""
+
+        def receive(delta: str) -> None:
+            nonlocal emitted
+            raw_parts.append(delta)
+            raw = "".join(raw_parts)
+            if not re.search(r'"type"\s*:\s*"final"', raw):
+                return
+            answer = _partial_json_string_field(raw, "answer")
+            if answer is None or len(answer) <= len(emitted):
+                return
+            new_text = answer[len(emitted):]
+            emitted = answer
+            if on_answer_delta:
+                on_answer_delta(new_text, answer)
+
+        raw = self._stream_chat(messages, receive, max_tokens=MAX_MODEL_TOKENS)
+        return raw or "".join(raw_parts)
 
     @staticmethod
     def _add_sources(target: list[dict], result: dict) -> None:

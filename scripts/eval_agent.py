@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.agent.runtime import AgentRuntime
-from app.agent.tools import ToolRegistry, ToolSpec
+from app.agent.tools import ToolRegistry, ToolSpec, VideoIdsArgs
 
 
 class EmptyArgs(BaseModel):
@@ -147,12 +147,53 @@ def test_timeout() -> None:
     assert result.error
 
 
+def test_streaming_answer() -> None:
+    chunks = [
+        '{"type":"final","answer":"你',
+        '好\\n世',
+        '界","citations":[]}',
+    ]
+
+    def stream_chat(messages, on_delta, max_tokens=2000):
+        for chunk in chunks:
+            on_delta(chunk)
+        return "".join(chunks)
+
+    deltas = []
+    execution = AgentRuntime(
+        stream_chat=stream_chat,
+        registry=registry_for(lambda args: {"ok": True, "data": {}, "sources": []}),
+    ).start("stream")
+    execution.on_text_delta = lambda delta, answer: deltas.append(delta)
+    result = execution.advance()
+    assert result.status == "completed"
+    assert result.answer == "你好\n世界"
+    assert "".join(deltas) == result.answer
+
+
+def test_args_alias() -> None:
+    seen = {}
+
+    def pick(args):
+        seen["ids"] = args.ids
+        return {"ok": True, "data": {}, "sources": []}
+
+    registry = ToolRegistry([
+        ToolSpec("pick", "offline test tool", VideoIdsArgs, "none", pick),
+    ])
+    result = registry.call("pick", {"aweme_ids": ["a", "b"]})
+    assert result["ok"], result["error"]
+    assert seen["ids"] == ["a", "b"]
+
+
 CASES = {
     "plan": test_plan_dependency,
     "retry": test_retry,
     "replan": test_replan,
     "approval": test_approval_gate,
     "timeout": test_timeout,
+    "stream": test_streaming_answer,
+    "args_alias": test_args_alias,
 }
 
 
