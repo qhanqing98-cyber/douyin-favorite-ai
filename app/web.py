@@ -359,8 +359,11 @@ def agent_approval(run_id: str, req: AgentApprovalReq):
         with _agent_lock:
             _agent_runs[run_id] = record
     with record["lock"]:
-        if record["status"] != "waiting_approval":
+        # execution.status 是实时状态源；record["status"] 只在线程收尾时同步，
+        # 直接用它会在“轮询到等待批准后立刻批准”时产生竞态误判。
+        if record["execution"].status != "waiting_approval":
             raise HTTPException(409, "当前 Agent 没有等待批准的操作")
+        record["status"] = "waiting_approval"
         record["execution"].on_change = lambda current: _agent_changed(run_id, record, current)
         record["execution"].on_text_delta = lambda delta, answer: _agent_text_delta(
             run_id, record, delta, answer,

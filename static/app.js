@@ -10,6 +10,7 @@ const state = {
   agentPoll: null,
   agentStream: null,
   streamFrame: null,
+  renderedTurns: new Set(),
   jobPoll: null,
   selectedVideos: new Set(),
   category: "",
@@ -78,14 +79,24 @@ function closeSidebar() { document.body.classList.remove("sidebar-open"); }
 function openInspector() { document.body.classList.add("inspector-open"); }
 function closeInspector() { document.body.classList.remove("inspector-open"); }
 
+function setFooterStatus(online) {
+  const footer = document.querySelector(".app-footer");
+  const label = $("footerStatus");
+  if (!footer || !label) return;
+  footer.classList.toggle("offline", !online);
+  label.textContent = online ? "本地服务已连接 · 数据仅存本机" : "服务未连接 · 请确认本地服务已启动";
+}
+
 async function loadStats() {
   try {
     const stats = await fetchJson("/api/stats");
     $("stTotal").textContent = stats.total;
     $("stTr").textContent = stats.transcribed;
     $("stSum").textContent = stats.summarized;
+    setFooterStatus(true);
   } catch (error) {
     $("stTotal").textContent = "?";
+    setFooterStatus(false);
     toast("无法连接本地服务，请确认服务已经启动。", "error");
   }
 }
@@ -180,8 +191,11 @@ function renderConversation() {
     bindStarterPrompts();
     return;
   }
-  $("conversation").innerHTML = runs.map((run, index) => `
-    <article class="turn" data-run-id="${esc(run.run_id)}">
+  $("conversation").innerHTML = runs.map((run, index) => {
+    const fresh = run.run_id && !state.renderedTurns.has(run.run_id);
+    if (run.run_id) state.renderedTurns.add(run.run_id);
+    return `
+    <article class="turn${fresh ? " turn-enter" : ""}" data-run-id="${esc(run.run_id)}" data-status="${esc(run.status)}">
       <div class="message user">
         <div class="message-avatar" aria-hidden="true">你</div>
         <div class="message-content">${esc(run.question)}</div>
@@ -194,7 +208,8 @@ function renderConversation() {
         </div>
       </div>
       ${index < runs.length - 1 ? '<div class="turn-divider"></div>' : ""}
-    </article>`).join("");
+    </article>`;
+  }).join("");
   requestAnimationFrame(() => { $("conversation").scrollTop = $("conversation").scrollHeight; });
 }
 
@@ -248,7 +263,7 @@ function renderApproval(run) {
   if (run.status === "waiting_approval" && run.pending_tool) {
     const pending = run.pending_tool;
     const count = Array.isArray(pending.args?.ids) ? `，涉及 ${pending.args.ids.length} 个视频` : "";
-    container.innerHTML = `<div class="approval-card"><h3>需要确认</h3><p>Agent 准备${esc(toolLabel(pending.tool))}${count}。${esc(pending.reason || "这项操作会修改本地数据。")}</p><div class="approval-actions"><button class="secondary-button compact" data-agent-action="approve">批准操作</button><button class="danger-button compact" data-agent-action="reject">拒绝并结束</button></div></div>`;
+    container.innerHTML = `<div class="approval-card needs-confirm"><h3>需要确认</h3><p>Agent 准备${esc(toolLabel(pending.tool))}${count}。${esc(pending.reason || "这项操作会修改本地数据。")}</p><div class="approval-actions"><button class="secondary-button compact" data-agent-action="approve">批准操作</button><button class="danger-button compact" data-agent-action="reject">拒绝并结束</button></div></div>`;
     return;
   }
   container.innerHTML = "";
@@ -300,6 +315,7 @@ async function openAgentSession(sessionId) {
     state.activeRunId = run?.run_id || "";
     if (state.activeRunId) localStorage.setItem("agentRunId", state.activeRunId);
     else localStorage.removeItem("agentRunId");
+    state.renderedTurns.clear(); // 会话切换后重新播放入场动画
     renderAgentWorkspace();
     if (run?.status === "running") watchAgent(run.run_id, sessionId);
   } catch (error) {
