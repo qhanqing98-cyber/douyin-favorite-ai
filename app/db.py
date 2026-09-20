@@ -213,6 +213,15 @@ def save_favorites(items: list[dict]) -> int:
         return cur.rowcount
 
 
+def _clamp_limit(limit: int, maximum: int = 500) -> int:
+    """钳制行数上限。SQLite 把负 LIMIT 视为“无上限”，必须挡在入口处。"""
+    try:
+        value = int(limit)
+    except (TypeError, ValueError):
+        return 30
+    return max(1, min(value, maximum))
+
+
 def search(query: str, limit: int = 30) -> list[sqlite3.Row]:
     """全文搜索。返回命中的视频行。
 
@@ -221,6 +230,7 @@ def search(query: str, limit: int = 30) -> list[sqlite3.Row]:
     所以短查询自动降级为 LIKE 全表扫描（收藏几千条内性能足够）。
     """
     q = query.strip()
+    limit = _clamp_limit(limit)
     if not q:
         return []
     if len(q) < 3:
@@ -293,7 +303,11 @@ _ASK_STOPWORDS = frozenset("""
 
 
 def ask_terms(q: str, max_terms: int = 8) -> list[str]:
-    """问答查询词：jieba 分词 + 停用词过滤（比 _query_terms 更适合整句口语提问）。"""
+    """问答查询词：jieba 分词 + 停用词过滤（比 _query_terms 更适合整句口语提问）。
+
+    返回的是原始词条，不做引号转义——调用方拼 FTS 短语时用 _fts_phrase()
+    转义，走 LIKE 时用原词，两种用途互不污染。
+    """
     import jieba
 
     words: list[str] = []
@@ -307,6 +321,11 @@ def ask_terms(q: str, max_terms: int = 8) -> list[str]:
     if not words:  # 全被过滤（例如整句都是虚词）→ 退回整句
         words = [q.strip()]
     return words
+
+
+def _fts_phrase(term: str) -> str:
+    """把词包成 FTS5 短语，转义内部双引号避免 "unterminated string"。"""
+    return '"' + term.replace('"', '""') + '"'
 
 
 def search_for_ask(query: str, limit: int = 30) -> list[sqlite3.Row]:
@@ -348,7 +367,7 @@ def search_for_ask(query: str, limit: int = 30) -> list[sqlite3.Row]:
             scope = "f.rowid = t.rowid AND " + valid
             # ① 长词全命中 + 短词也都出现：最相关
             where = "favorites_fts MATCH ?"
-            args: list = [" AND ".join(f'"{t}"' for t in long_terms)]
+            args: list = [" AND ".join(_fts_phrase(t) for t in long_terms)]
             for t in short_terms:
                 where += f" AND ({cols})"
                 args += like_args(t)
@@ -360,7 +379,7 @@ def search_for_ask(query: str, limit: int = 30) -> list[sqlite3.Row]:
             # ② 放宽到「任一长词命中」
             rows = conn.execute(
                 f"{base}favorites_fts MATCH ? AND {scope} {ranks}",
-                (" OR ".join(f'"{t}"' for t in long_terms), limit),
+                (" OR ".join(_fts_phrase(t) for t in long_terms), limit),
             ).fetchall()
             if rows:
                 return rows
@@ -757,6 +776,8 @@ def add_agent_event(run_id: str, step_no: int, event_type: str, payload: dict) -
 
 def list_videos(limit: int = 30, offset: int = 0, category: str | None = None) -> list[sqlite3.Row]:
     """按采集时间倒序列出视频（收藏库页），可按分类过滤；"__none__" = 未分类。"""
+    limit = _clamp_limit(limit)
+    offset = max(0, int(offset or 0))
     with get_conn() as conn:
         if category == "__none__":
             return conn.execute(

@@ -230,6 +230,8 @@ class AgentExecution:
         self.answer = ""
         self.error: str | None = None
         self.pending_tool: dict | None = None
+        # 连续被拒绝的重复规划次数；用于在提示无效时终止，避免空转到 max_steps。
+        self.replan_rejections = 0
 
     def _checkpoint(self) -> None:
         """通知外层保存当前快照；没有持久化回调时不产生额外开销。"""
@@ -272,6 +274,7 @@ class AgentExecution:
             "answer": self.answer,
             "error": self.error,
             "pending_tool": self.pending_tool,
+            "replan_rejections": self.replan_rejections,
         }
 
     @classmethod
@@ -288,6 +291,7 @@ class AgentExecution:
         execution.answer = state.get("answer", "")
         execution.error = state.get("error")
         execution.pending_tool = state.get("pending_tool")
+        execution.replan_rejections = int(state.get("replan_rejections", 0))
         return execution
 
     def resume(self) -> AgentResult:
@@ -325,8 +329,8 @@ class AgentExecution:
         completed = {
             task["id"]: task for task in self.plan if task.get("status") == "completed"
         }
-        if self.plan and not any(task.get("status") == "failed" for task in self.plan):
-            return "计划已经存在，只有任务失败后才能重规划"
+        if self.plan and not self._plan_is_stuck():
+            return "计划已经存在，只有任务失败或计划卡住后才能重规划"
 
         task_ids = set(completed)
         normalized = []
@@ -347,6 +351,18 @@ class AgentExecution:
         ]
         self.plan = preserved + normalized
         return None
+
+    def _plan_is_stuck(self) -> bool:
+        """计划是否已无法推进：存在失败任务，或没有依赖满足的待执行任务。
+
+        计划卡住时允许重规划，否则拒绝——这保证「依赖未满足」提示中
+        “在无执行路径时输出新 plan”的指引始终可兑现，不会空转。
+        """
+        if any(task.get("status") == "failed" for task in self.plan):
+            return True
+        return self._ready_task() is None and any(
+            task.get("status") == "pending" for task in self.plan
+        )
 
     def advance(self) -> AgentResult:
         """从当前状态继续执行，直到终态或遇到待批准写操作。"""
@@ -387,8 +403,8 @@ class AgentExecution:
                 plan_error = self._apply_plan(decision)
                 if plan_error and was_replan:
                     # 计划仍然有效时模型重复规划：反馈提示引导回正轨，而不是直接失败。
-                    self._replan_rejections = getattr(self, "_replan_rejections", 0) + 1
-                    if self._replan_rejections <= 2:
+                    self.replan_rejections += 1
+                    if self.replan_rejections <= 2:
                         self.steps.append({
                             "step": self.step_no,
                             "type": "plan",
@@ -405,6 +421,10 @@ class AgentExecution:
                         })
                         self._checkpoint()
                         continue
+                    self.status = "failed"
+                    self.error = f"模型多次重复规划且未按提示继续：{plan_error}"
+                    self._checkpoint()
+                    return self._result()
                 if plan_error:
                     self.status = "failed"
                     self.error = plan_error
@@ -460,14 +480,23 @@ class AgentExecution:
                     f"{item['id']}={item.get('status', 'pending')}"
                     for item in self.plan
                 )
-                ready_label = ready["id"] if ready else "无（需要重新规划）"
+                if ready is not None:
+                    ready_label = ready["id"]
+                    guidance = (
+                        f"请改为调用可执行任务 {ready['id']}，不要输出新的 plan。"
+                    )
+                else:
+                    ready_label = "无"
+                    guidance = (
+                        "当前没有任何依赖已满足的任务，请输出新的 plan 调整剩余任务；"
+                        "若已有足够信息，直接输出 final 作答。"
+                    )
                 self.messages.append({
                     "role": "user",
                     "content": (
                         f"工具调用指定的任务 {decision.task_id or '未指定'} 当前不能执行，"
                         f"因为依赖尚未满足。当前任务状态：{task_status}。"
-                        f"当前可执行任务：{ready_label}。不要执行这次调用；"
-                        "请改为调用可执行任务，或在没有可执行路径时输出新的 plan。"
+                        f"当前可执行任务：{ready_label}。不要执行这次调用；{guidance}"
                     ),
                 })
                 self.steps.append({

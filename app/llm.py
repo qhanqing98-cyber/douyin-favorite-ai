@@ -75,7 +75,9 @@ def _chat(messages: list[dict], max_tokens: int = 1500,
     resp = client.chat.completions.create(
         model=_model(settings), messages=messages, max_tokens=max_tokens, temperature=0.3
     )
-    return resp.choices[0].message.content.strip()
+    # 推理类模型或部分兼容服务可能返回 content=None，直接 .strip() 会抛 AttributeError。
+    content = resp.choices[0].message.content or ""
+    return content.strip()
 
 
 def _chat_stream(messages: list[dict], on_delta: Callable[[str], None],

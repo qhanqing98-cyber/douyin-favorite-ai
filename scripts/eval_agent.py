@@ -108,6 +108,69 @@ def test_replan() -> None:
     assert result.plan[0]["id"] == "new"
 
 
+def test_stuck_plan_replan() -> None:
+    """计划无可执行任务时，重规划必须被接受，否则会空转到步数耗尽。"""
+    def handler(args):
+        return {"ok": True, "data": {}, "sources": []}
+
+    registry = registry_for(handler)
+    result = AgentRuntime(
+        chat=scripted_chat([
+            # 计划 b 依赖 a，但模型先去调用依赖未满足的 b
+            '{"type":"plan","tasks":['
+            '{"id":"a","title":"first","depends_on":[]},'
+            '{"id":"b","title":"second","depends_on":["a"]}]}',
+            # 触发“依赖未满足”拒绝分支
+            '{"type":"tool_call","tool":"lookup","task_id":"b","args":{}}',
+            # 模型按提示重规划（此时计划并未卡死，因为有可执行的 a）
+            '{"type":"plan","reason":"reorder","tasks":['
+            '{"id":"a","title":"first","depends_on":[]},'
+            '{"id":"b","title":"second","depends_on":["a"]}]}',
+            '{"type":"tool_call","tool":"lookup","task_id":"a","args":{}}',
+            '{"type":"final","answer":"done","citations":[]}',
+        ]),
+        registry=registry,
+        max_tool_retries=0,
+    ).run("stuck")
+
+    assert result.status == "completed", result.error
+    rejected = [s for s in result.steps if s.get("status") == "rejected"]
+    assert rejected, "应记录一次被拒绝的调用"
+    # 重规划发生在计划仍可推进时：第一次提示后模型应改调可执行任务。
+    assert result.plan[0]["status"] == "completed"
+
+
+def test_plan_stuck_allows_replan() -> None:
+    """依赖成环导致计划卡死时，_apply_plan 必须放行重规划。"""
+    from app.agent.runtime import AgentExecution, AgentRuntime as _RT, PlanDecision, PlanItem
+
+    execution = AgentExecution(_RT(), "stuck")
+    execution.plan = [
+        {"id": "a", "title": "A", "depends_on": ["b"], "status": "pending"},
+        {"id": "b", "title": "B", "depends_on": ["a"], "status": "pending"},
+    ]
+    assert execution._plan_is_stuck()
+
+    decision = PlanDecision(
+        type="plan", reason="break cycle",
+        tasks=[PlanItem(id="fresh", title="fresh", depends_on=[])],
+    )
+    assert execution._apply_plan(decision) is None
+    assert [task["id"] for task in execution.plan] == ["fresh"]
+
+
+def test_replan_rejections_round_trip() -> None:
+    """连续重复规划的计数必须可持久化，避免快照恢复后阈值漂移。"""
+    from app.agent.runtime import AgentExecution, AgentRuntime as _RT
+
+    execution = AgentExecution(_RT(), "q")
+    assert execution.replan_rejections == 0
+    state = execution.to_state()
+    assert "replan_rejections" in state
+    restored = AgentExecution.from_state(_RT(), {**state, "replan_rejections": 5})
+    assert restored.replan_rejections == 5
+
+
 def test_approval_gate() -> None:
     writes = []
 
@@ -194,6 +257,9 @@ CASES = {
     "timeout": test_timeout,
     "stream": test_streaming_answer,
     "args_alias": test_args_alias,
+    "stuck_plan": test_stuck_plan_replan,
+    "replan_stuck": test_plan_stuck_allows_replan,
+    "replan_state": test_replan_rejections_round_trip,
 }
 
 
