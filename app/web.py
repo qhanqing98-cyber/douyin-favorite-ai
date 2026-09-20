@@ -30,7 +30,8 @@ db.init_db()
 # 取消是协作式的：任务循环里查 cancel 标志，在"条与条之间"安全退出；
 # 每条数据都是独立写库的，中断后重跑自动续上。
 _job = {"id": None, "running": False, "name": "", "progress": "", "error": "",
-        "done": 0, "total": 0, "cancel": False, "started_at": 0.0}
+        "done": 0, "total": 0, "cancel": False, "started_at": 0.0,
+        "eta_seconds": None}
 _lock = threading.Lock()
 _agent_lock = threading.Lock()
 _agent_runs: dict[str, dict] = {}
@@ -42,7 +43,8 @@ def _start_job(name: str, fn) -> None:
             raise HTTPException(409, f"已有任务在跑：{_job['name']}")
         job_id = db.create_job(name)
         _job.update(running=True, name=name, progress="启动中...", error="",
-                    done=0, total=0, cancel=False, started_at=time.time(), id=job_id)
+                    done=0, total=0, cancel=False, started_at=time.time(),
+                    eta_seconds=None, id=job_id)
 
     def wrapper():
         cancelled = False
@@ -200,6 +202,28 @@ def _emit_agent_event(record: dict, event: dict) -> None:
         subscriber.put(event)
 
 
+def _agent_tool_progress(run_id: str, record: dict, done: int, total: int, title: str) -> None:
+    """把转写工具的进度广播给 Agent 右侧执行详情。"""
+    now = time.monotonic()
+    with record["lock"]:
+        started = record.get("tool_started_at")
+        if started is None or done == 0:
+            started = now
+            record["tool_started_at"] = started
+        elapsed = max(0.0, now - started)
+        rate = done / elapsed if done > 0 and elapsed > 0 else 0.0
+        eta = round((total - done) / rate) if rate > 0 else None
+        record["tool_progress"] = {
+            "kind": "transcription",
+            "done": done,
+            "total": total,
+            "title": title,
+            "elapsed_seconds": round(elapsed),
+            "eta_seconds": eta,
+        }
+    _emit_agent_event(record, {"type": "snapshot", "run": _agent_payload(run_id, record)})
+
+
 def _agent_changed(run_id: str, record: dict, execution: AgentExecution) -> None:
     _checkpoint_agent(run_id, execution)
     _emit_agent_event(record, {"type": "snapshot", "run": _agent_payload(run_id, record)})
@@ -233,6 +257,8 @@ def _load_agent_record(run_id: str) -> dict | None:
         "error": row["error"],
         "lock": threading.RLock(),
         "subscribers": set(),
+        "tool_progress": None,
+        "tool_started_at": None,
         "created_at": row["created_at"],
     }
 
@@ -261,6 +287,7 @@ def _agent_payload(run_id: str, record: dict) -> dict:
                 "plan": record["execution"].plan,
                 "steps": record["execution"].steps,
                 "pending_tool": record["execution"].pending_tool,
+                "tool_progress": record.get("tool_progress"),
                 "llm": llm_state,
             }
         return {
@@ -268,6 +295,7 @@ def _agent_payload(run_id: str, record: dict) -> dict:
             "session_id": record.get("session_id"),
             "question": record["execution"].question,
             "llm": llm_state,
+            "tool_progress": record.get("tool_progress"),
             **result.as_dict(),
         }
 
@@ -330,8 +358,13 @@ def agent_ask(
         "session_id": session_id,
         "lock": threading.RLock(),
         "subscribers": set(),
+        "tool_progress": None,
+        "tool_started_at": None,
         "created_at": time.time(),
     }
+    execution.runtime.tool_progress = lambda done, total, title: _agent_tool_progress(
+        run_id, record, done, total, title,
+    )
     execution.on_change = lambda current: _agent_changed(run_id, record, current)
     execution.on_text_delta = lambda delta, answer: _agent_text_delta(
         run_id, record, delta, answer,
@@ -470,6 +503,9 @@ def agent_approval(run_id: str, req: AgentApprovalReq,
         record["pool"] = router.endpoints
         record["needs_credentials"] = False
         record["execution"].runtime = _agent_runtime(router)
+        record["execution"].runtime.tool_progress = lambda done, total, title: _agent_tool_progress(
+            run_id, record, done, total, title,
+        )
         result = record["execution"].approve(req.approved, continue_run=False)
         record["result"] = result
         record["status"] = result.status
@@ -517,6 +553,9 @@ def agent_continue(
             run_id, record, delta, answer,
         )
         record["execution"].runtime = _agent_runtime(router)
+        record["execution"].runtime.tool_progress = lambda done, total, title: _agent_tool_progress(
+            run_id, record, done, total, title,
+        )
         record["execution"].status = "running"
         record["execution"].error = None
         record["result"] = None
@@ -705,10 +744,22 @@ def transcribe(req: JobReq):
 
     def run():
         def on_progress(done: int, t: int, title: str):
-            _set_progress(done=done, total=t, progress=title[:24])
+            elapsed = max(0.0, time.time() - _job["started_at"])
+            rate = done / elapsed if done > 0 and elapsed > 0 else 0.0
+            eta = round((t - done) / rate) if rate > 0 else None
+            _set_progress(
+                done=done, total=t, progress=title[:48], eta_seconds=eta,
+            )
 
-        transcribe.run(limit=limit, progress=on_progress, ids=ids,
-                       should_stop=lambda: _job["cancel"])
+        report = transcribe.run(
+            limit=limit, progress=on_progress, ids=ids,
+            should_stop=lambda: _job["cancel"],
+        )
+        if report.failed:
+            _set_progress(
+                error=(f"已完成 {report.processed}/{report.requested} 条，"
+                       f"{len(report.failed)} 条失败，失败项保留待重试"),
+            )
         _reindex_quietly()  # 新转写的内容补进向量索引
 
     _start_job(name, run)
