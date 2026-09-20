@@ -31,7 +31,7 @@ db.init_db()
 # 每条数据都是独立写库的，中断后重跑自动续上。
 _job = {"id": None, "running": False, "name": "", "progress": "", "error": "",
         "done": 0, "total": 0, "cancel": False, "started_at": 0.0,
-        "eta_seconds": None}
+        "eta_seconds": None, "eta_updated_at": 0.0}
 _lock = threading.Lock()
 _agent_lock = threading.Lock()
 _agent_runs: dict[str, dict] = {}
@@ -44,7 +44,7 @@ def _start_job(name: str, fn) -> None:
         job_id = db.create_job(name)
         _job.update(running=True, name=name, progress="启动中...", error="",
                     done=0, total=0, cancel=False, started_at=time.time(),
-                    eta_seconds=None, id=job_id)
+                    eta_seconds=None, eta_updated_at=0.0, id=job_id)
 
     def wrapper():
         cancelled = False
@@ -65,6 +65,8 @@ def _start_job(name: str, fn) -> None:
                 error=error, done=_job["done"], total=_job["total"],
             )
             _job["running"] = False
+            _job["eta_seconds"] = None
+            _job["eta_updated_at"] = 0.0
 
     threading.Thread(target=wrapper, daemon=True).start()
 
@@ -220,6 +222,7 @@ def _agent_tool_progress(run_id: str, record: dict, done: int, total: int, title
             "title": title,
             "elapsed_seconds": round(elapsed),
             "eta_seconds": eta,
+            "updated_at": now,
         }
     _emit_agent_event(record, {"type": "snapshot", "run": _agent_payload(run_id, record)})
 
@@ -267,6 +270,19 @@ def _agent_payload(run_id: str, record: dict) -> dict:
     with record["lock"]:
         result = record["result"]
         router = record.get("router")
+        tool_progress = record.get("tool_progress")
+        if tool_progress:
+            tool_progress = dict(tool_progress)
+            updated_at = tool_progress.pop("updated_at", None)
+            if updated_at is not None and record.get("status") == "running":
+                age = max(0.0, time.monotonic() - updated_at)
+                tool_progress["elapsed_seconds"] = round(
+                    float(tool_progress.get("elapsed_seconds") or 0) + age
+                )
+                if tool_progress.get("eta_seconds") is not None:
+                    tool_progress["eta_seconds"] = max(
+                        0, round(float(tool_progress["eta_seconds"]) - age)
+                    )
         llm_state = None
         if router is not None:
             llm_state = {
@@ -287,7 +303,7 @@ def _agent_payload(run_id: str, record: dict) -> dict:
                 "plan": record["execution"].plan,
                 "steps": record["execution"].steps,
                 "pending_tool": record["execution"].pending_tool,
-                "tool_progress": record.get("tool_progress"),
+                "tool_progress": tool_progress,
                 "llm": llm_state,
             }
         return {
@@ -295,7 +311,7 @@ def _agent_payload(run_id: str, record: dict) -> dict:
             "session_id": record.get("session_id"),
             "question": record["execution"].question,
             "llm": llm_state,
-            "tool_progress": record.get("tool_progress"),
+            "tool_progress": tool_progress,
             **result.as_dict(),
         }
 
@@ -450,7 +466,11 @@ def agent_stream(run_id: str):
                     yield ": keep-alive\n\n"
                     continue
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                if event.get("type") == "done":
+                event_status = (event.get("run") or {}).get("status")
+                if event.get("type") == "done" or event_status in {
+                    "waiting_approval", "paused", "interrupted",
+                    "completed", "failed", "cancelled",
+                }:
                     return
         finally:
             with record["lock"]:
@@ -496,16 +516,17 @@ def agent_approval(run_id: str, req: AgentApprovalReq,
         record["execution"].on_text_delta = lambda delta, answer: _agent_text_delta(
             run_id, record, delta, answer,
         )
-        router = _request_router(req.llm_pool, api_key, base_url, model) if req.llm_pool else record.get("router")
-        if router is None:
-            raise HTTPException(401, "请重新提交模型池后再继续 Agent 任务")
-        record["router"] = router
-        record["pool"] = router.endpoints
-        record["needs_credentials"] = False
-        record["execution"].runtime = _agent_runtime(router)
-        record["execution"].runtime.tool_progress = lambda done, total, title: _agent_tool_progress(
-            run_id, record, done, total, title,
-        )
+        if req.approved:
+            router = _request_router(req.llm_pool, api_key, base_url, model) if req.llm_pool else record.get("router")
+            if router is None:
+                raise HTTPException(401, "请重新提交模型池后再继续 Agent 任务")
+            record["router"] = router
+            record["pool"] = router.endpoints
+            record["needs_credentials"] = False
+            record["execution"].runtime = _agent_runtime(router)
+            record["execution"].runtime.tool_progress = lambda done, total, title: _agent_tool_progress(
+                run_id, record, done, total, title,
+            )
         result = record["execution"].approve(req.approved, continue_run=False)
         record["result"] = result
         record["status"] = result.status
@@ -627,7 +648,7 @@ def login_ep():
             progress=lambda m: _set_progress(progress=m[:60]),
             should_stop=lambda: _job["cancel"],
         )
-        if not ok and not _job["cancel"]:
+        if not ok and not _job["cancel"] and not _job["error"]:
             _set_progress(error="等待超时，未检测到登录")
 
     _start_job("扫码登录抖音", run)
@@ -744,11 +765,13 @@ def transcribe(req: JobReq):
 
     def run():
         def on_progress(done: int, t: int, title: str):
-            elapsed = max(0.0, time.time() - _job["started_at"])
+            now = time.time()
+            elapsed = max(0.0, now - _job["started_at"])
             rate = done / elapsed if done > 0 and elapsed > 0 else 0.0
             eta = round((t - done) / rate) if rate > 0 else None
             _set_progress(
                 done=done, total=t, progress=title[:48], eta_seconds=eta,
+                eta_updated_at=now,
             )
 
         report = transcribe.run(
@@ -756,9 +779,13 @@ def transcribe(req: JobReq):
             should_stop=lambda: _job["cancel"],
         )
         if report.failed:
+            details = "；".join(
+                f"{item.get('aweme_id', '')}: {str(item.get('reason', '未知原因'))[:120]}"
+                for item in report.failed[:2]
+            )
             _set_progress(
                 error=(f"已完成 {report.processed}/{report.requested} 条，"
-                       f"{len(report.failed)} 条失败，失败项保留待重试"),
+                       f"{len(report.failed)} 条失败，失败项保留待重试。原因：{details}"),
             )
         _reindex_quietly()  # 新转写的内容补进向量索引
 
@@ -943,8 +970,15 @@ def job():
         "interrupted": "已中断",
         "running": "运行中",
     }
+    payload = dict(_job)
+    if payload["running"] and payload.get("eta_seconds") is not None:
+        updated_at = payload.get("eta_updated_at") or payload["started_at"]
+        payload["eta_seconds"] = max(
+            0, round(payload["eta_seconds"] - (time.time() - updated_at))
+        )
+    payload.pop("eta_updated_at", None)
     return {
-        **_job,
+        **payload,
         "elapsed": round(time.time() - _job["started_at"]) if _job["running"] else 0,
         "history": [
             {**item, "status": status_text.get(item["status"], item["status"])}

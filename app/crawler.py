@@ -19,6 +19,13 @@ USER_DATA_DIR = Path(__file__).resolve().parent.parent / "browser_data"
 FAVORITE_URL = "https://www.douyin.com/user/self"
 FAVORITES_TAB_TEXT = "收藏"
 
+# 抖音登录态不是只有一个固定 Cookie。不同登录入口、浏览器版本和
+# 风控策略可能只刷新其中一部分；只检查 sessionid 会把有效登录误判为未登录。
+LOGIN_COOKIE_NAMES = {
+    "sessionid", "sessionid_ss", "sid_guard", "sid_tt",
+    "uid_tt", "uid_tt_ss",
+}
+
 # 接口 URL 特征：首页用 .../aweme/favorite/，翻页后改用 .../aweme/listcollection/
 # （实测：两个都含 aweme_list 字段），其他请求一律放过
 _API_HINTS = ("favorite", "listcollection")
@@ -47,9 +54,28 @@ def _open_browser(headless: bool = False) -> tuple[object, BrowserContext]:
 
 
 def _has_login_cookie(ctx: BrowserContext) -> bool:
-    """检查是否已有登录态 cookie。sessionid / sessionid_ss 是抖音的会话凭证。"""
-    names = {c["name"] for c in ctx.cookies("https://www.douyin.com")}
-    return bool(names & {"sessionid", "sessionid_ss"})
+    """检查是否已有足够强的抖音登录态 Cookie。"""
+    try:
+        names = {c["name"] for c in ctx.cookies("https://www.douyin.com")}
+    except Exception:
+        return False
+    return bool(names & LOGIN_COOKIE_NAMES)
+
+
+def _validate_logged_in_page(page: Page, ctx: BrowserContext) -> bool:
+    """用需要登录的个人页验证 Cookie，而不是只看 Cookie 是否存在。"""
+    if not _has_login_cookie(ctx):
+        return False
+    try:
+        page.goto(FAVORITE_URL, wait_until="domcontentloaded", timeout=30_000)
+        page.wait_for_timeout(1_500)
+        current_url = page.url.lower()
+        if any(marker in current_url for marker in ("/login", "/passport", "authorize")):
+            return False
+        # 收藏 tab 需要登录后才会出现；这是比 sessionid 更可靠的实际验证。
+        return page.get_by_text(FAVORITES_TAB_TEXT, exact=True).count() > 0
+    except Exception:
+        return False
 
 
 def login(timeout_s: int = 300, progress=None, should_stop=None) -> bool:
@@ -65,24 +91,51 @@ def login(timeout_s: int = 300, progress=None, should_stop=None) -> bool:
         if progress:
             progress(msg)
 
-    pw, ctx = _open_browser()
-    page = ctx.pages[0] if ctx.pages else ctx.new_page()
-    page.goto("https://www.douyin.com/", wait_until="domcontentloaded")
-    report("→ 若页面未自动弹出二维码，请点击右上角『登录』后扫码...")
-    deadline = time.time() + timeout_s
+    pw = None
+    ctx = None
     ok = False
-    while time.time() < deadline:
-        if should_stop and should_stop():
-            report("收到取消信号，放弃登录。")
-            break
-        if _has_login_cookie(ctx):
-            ok = True
-            break
-        report(f"等待扫码中...（已等 {int(time.time() - (deadline - timeout_s))} 秒）")
-        time.sleep(3)
-    ctx.close()
-    pw.stop()
+    started_at = time.time()
+    try:
+        pw, ctx = _open_browser()
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        try:
+            page.goto("https://www.douyin.com/", wait_until="domcontentloaded", timeout=30_000)
+        except Exception as exc:
+            report(f"打开抖音失败：{str(exc)[:160]}")
+            return False
+        report("→ 请在弹出的浏览器窗口扫码；若没有二维码，请点击右上角『登录』...")
+        deadline = started_at + timeout_s
+        while time.time() < deadline:
+            if should_stop and should_stop():
+                report("收到取消信号，放弃登录。")
+                break
+            if _has_login_cookie(ctx):
+                report("检测到登录凭证，正在验证抖音登录状态...")
+                if _validate_logged_in_page(page, ctx):
+                    ok = True
+                    break
+                report("Cookie 存在但登录验证未通过，请继续扫码或重新点击登录...")
+            report(f"等待扫码中...（已等 {int(time.time() - started_at)} 秒）")
+            time.sleep(3)
+    except Exception as exc:
+        report(f"扫码登录启动失败：{str(exc)[:180]}")
+    finally:
+        if ctx is not None:
+            try:
+                ctx.close()
+            except Exception:
+                pass
+        if pw is not None:
+            try:
+                pw.stop()
+            except Exception:
+                pass
     if ok:
+        try:
+            # 让转写使用刚刚验证过的浏览器登录态，避免沿用旧 cookies.txt。
+            export_cookies()
+        except Exception as exc:
+            report(f"登录已验证，但刷新转写 Cookie 失败：{str(exc)[:120]}")
         report(f"登录成功，登录态已保存到 {USER_DATA_DIR}")
     elif not (should_stop and should_stop()):
         report("等待超时，未检测到登录。请重跑 login 再扫一次。")

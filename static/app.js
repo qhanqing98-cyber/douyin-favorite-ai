@@ -648,6 +648,10 @@ function watchAgent(runId, sessionId = state.sessionId) {
     if (payload.run) {
       mergeRun(payload.run);
       renderAgentWorkspace();
+      if (payload.run.status !== "running") {
+        stream.close();
+        state.agentStream = null;
+      }
     }
     if (payload.type === "done") {
       stopAgentWatch();
@@ -706,7 +710,7 @@ async function askAgent(event) {
 async function agentAction(action) {
   const run = latestRun();
   if (!run) return;
-  if (["approve", "reject", "continue"].includes(action) && !ensureLlmConfigured()) return;
+  if (["approve", "continue"].includes(action) && !ensureLlmConfigured()) return;
   let url = `/api/agent/${encodeURIComponent(run.run_id)}`;
   let options = { method: "POST" };
   if (action === "approve" || action === "reject") {

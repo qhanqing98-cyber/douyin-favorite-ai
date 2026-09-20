@@ -15,11 +15,11 @@ from pydantic import BaseModel, Field
 
 from .tools import TOOLS, ToolRegistry
 
-MAX_STEPS = 12
+MAX_STEPS = 32
 MAX_MODEL_TOKENS = 2000
 MAX_OBSERVATION_CHARS = 12000
 MAX_TOOL_RETRIES = 2
-DEFAULT_TIMEOUT_SECONDS = 120.0
+DEFAULT_TIMEOUT_SECONDS = 300.0
 
 
 class ToolCallDecision(BaseModel):
