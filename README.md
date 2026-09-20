@@ -54,7 +54,7 @@
    - `[3/5]` 下载 Whisper 语音模型（**约 461MB，仅首次**，来自 hf-mirror.com 镜像，存到 `models/`，来源/去向/用途都会打印在屏幕上）
    - `[4/5]` 下载 BGE 句向量模型（**约 120MB，仅首次**，问 AI 的语义检索用；缺了不致命，问答会自动退化为纯关键词检索）
    - `[5/5]` 启动服务并自动打开浏览器
-3. 首次运行会提示：打开 `.env` 填入 `LLM_API_KEY`（[DeepSeek](https://platform.deepseek.com) 等任何 OpenAI 兼容服务的 key），保存后再双击一次 `start.bat`
+3. 启动后打开「模型设置」，添加至少一个 OpenAI-compatible Provider；多个配置可以组成模型池，按优先级和故障情况自动切换
 4. 页面里点「扫码登录」→「同步收藏夹」→「一键分类全部」，之后就能搜索和转写了
 
 ### 方式二：手动安装（跨平台 / 想了解细节）
@@ -70,15 +70,20 @@ $env:PLAYWRIGHT_DOWNLOAD_HOST="https://registry.npmmirror.com/-/binary/playwrigh
 playwright install chromium
 ```
 
-### 配置 LLM（概要 / 问答需要）
+### 配置 LLM（概要 / 问答 / Agent 需要）
 
-复制 `.env.example` 为 `.env`，填入你的 key：
+推荐直接在 Web 的「模型设置」中配置。配置会保存在当前浏览器的 `localStorage`，服务端只在一次 Agent 任务期间临时持有，不写入数据库：
 
-```ini
-LLM_API_KEY=sk-xxxx          # 任何 OpenAI 兼容服务的 key
-LLM_BASE_URL=https://api.deepseek.com/v1/
-LLM_MODEL=deepseek-chat
+```text
+模型池
+├─ 主模型 Key 1   deepseek-chat
+├─ 主模型 Key 2   deepseek-chat
+└─ 备用模型       其他兼容模型
 ```
+
+每个配置包含：名称、API 地址、模型名称、API Key、启用状态、优先级和权重。远程地址必须使用 HTTPS；共享电脑使用完毕后可点击「清除此浏览器配置」。
+
+当前 Web 版本首先支持 OpenAI Chat Completions 兼容服务。项目仍保留 `.env` 作为 CLI/旧调用方式的兼容配置，但 Web 请求不会读取它作为默认 Key。
 
 ### 首次使用
 

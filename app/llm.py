@@ -7,6 +7,7 @@
 兼容任何 OpenAI 协议的服务（混元/Ollama/Qwen），改 .env 三个值即可换。
 """
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -16,6 +17,20 @@ PROJECT = Path(__file__).resolve().parent.parent
 ENV_FILE = PROJECT / ".env"
 
 _client = None  # 进程内复用
+
+
+@dataclass
+class LLMSettings:
+    """一次 Web 会话提供的模型配置；密钥只保存在内存，不参与 repr。"""
+    api_key: str = field(repr=False)
+    base_url: str
+    model: str
+    _client: OpenAI | None = field(default=None, init=False, repr=False)
+
+    def client(self) -> OpenAI:
+        if self._client is None:
+            self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        return self._client
 
 
 def _load_env() -> None:
@@ -47,23 +62,29 @@ def _get_client() -> OpenAI:
     return _client
 
 
-def _model() -> str:
+def _model(settings: LLMSettings | None = None) -> str:
+    if settings is not None:
+        return settings.model
     _load_env()
     return os.environ.get("LLM_MODEL", "deepseek-chat")
 
 
-def _chat(messages: list[dict], max_tokens: int = 1500) -> str:
-    resp = _get_client().chat.completions.create(
-        model=_model(), messages=messages, max_tokens=max_tokens, temperature=0.3
+def _chat(messages: list[dict], max_tokens: int = 1500,
+          settings: LLMSettings | None = None) -> str:
+    client = settings.client() if settings is not None else _get_client()
+    resp = client.chat.completions.create(
+        model=_model(settings), messages=messages, max_tokens=max_tokens, temperature=0.3
     )
     return resp.choices[0].message.content.strip()
 
 
 def _chat_stream(messages: list[dict], on_delta: Callable[[str], None],
-                 max_tokens: int = 1500) -> str:
+                 max_tokens: int = 1500,
+                 settings: LLMSettings | None = None) -> str:
     """流式读取 OpenAI 兼容接口，同时返回完整文本供上层解析与持久化。"""
-    stream = _get_client().chat.completions.create(
-        model=_model(), messages=messages, max_tokens=max_tokens,
+    client = settings.client() if settings is not None else _get_client()
+    stream = client.chat.completions.create(
+        model=_model(settings), messages=messages, max_tokens=max_tokens,
         temperature=0.3, stream=True,
     )
     parts: list[str] = []
@@ -78,7 +99,8 @@ def _chat_stream(messages: list[dict], on_delta: Callable[[str], None],
     return "".join(parts).strip()
 
 
-def summarize(title: str, author: str, transcript: str) -> str:
+def summarize(title: str, author: str, transcript: str,
+              settings: LLMSettings | None = None) -> str:
     """把一条视频的转写压成概要。截断 8000 字防超上下文。"""
     prompt = (
         "请为下面这个抖音视频的语音转写内容生成概要，要求：\n"
@@ -87,10 +109,11 @@ def summarize(title: str, author: str, transcript: str) -> str:
         "3. 不要编造转写里没有的信息\n\n"
         f"标题：{title}\n作者：{author}\n转写内容：\n{transcript[:8000]}"
     )
-    return _chat([{"role": "user", "content": prompt}])
+    return _chat([{"role": "user", "content": prompt}], settings=settings)
 
 
-def answer(question: str, contexts: list[dict]) -> str:
+def answer(question: str, contexts: list[dict],
+           settings: LLMSettings | None = None) -> str:
     """检索问答：把命中的视频转写作为上下文，让模型"看着原文"回答。
 
     contexts: [{title, author, aweme_id, transcript, excerpt}]。
@@ -112,4 +135,5 @@ def answer(question: str, contexts: list[dict]) -> str:
     return _chat(
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
         max_tokens=2000,
+        settings=settings,
     )

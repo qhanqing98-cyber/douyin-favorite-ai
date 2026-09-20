@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark">
   <title>浮光 · 抖音收藏研究台</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/static/app.css?v=7">
+  <link rel="stylesheet" href="/static/app.css?v=8">
 </head>
 <body>
   <a class="skip-link" href="#mainContent">跳到主要内容</a>
@@ -31,7 +31,6 @@
         <button class="new-session-button" id="newSessionButton">
           <span>新建研究</span><span aria-hidden="true">↗</span>
         </button>
-
         <div class="library-stats" aria-label="收藏库统计">
           <div><strong id="stTotal">—</strong><span>收藏</span></div>
           <div><strong id="stTr">—</strong><span>转写</span></div>
@@ -59,6 +58,7 @@
           <button class="nav-item active" data-view="agent" aria-current="page"><span aria-hidden="true">◉</span><span>Agent 研究</span></button>
           <button class="nav-item" data-view="library"><span aria-hidden="true">▧</span><span>收藏库</span></button>
           <button class="nav-item" data-view="maintenance"><span aria-hidden="true">⌁</span><span>数据维护</span></button>
+          <button class="nav-item" data-view="settings"><span aria-hidden="true">⚙</span><span>模型设置</span></button>
         </nav>
         <div class="topbar-status"><span class="pulse-dot"></span>本地知识库</div>
       </header>
@@ -141,6 +141,60 @@
             <div class="history" id="history"></div>
           </section>
         </section>
+
+        <section class="app-view" id="viewSettings" data-view-panel="settings">
+          <header class="view-header">
+            <div><div class="eyebrow">MODEL CONNECTION</div><h1>模型设置</h1><p>配置一次后，这台设备上的当前浏览器会持续使用该模型。</p></div>
+          </header>
+          <div class="settings-layout">
+            <aside class="settings-guide">
+              <div class="settings-guide-head"><span class="operation-index">LLM</span><span class="settings-guide-label">LOCAL ONLY</span></div>
+              <h2>把模型接入你的研究台</h2>
+              <p>配置只属于当前浏览器。Agent 请求时临时提交给服务端，任务结束后释放，不会写入项目数据库。</p>
+              <div class="settings-flow" aria-label="配置数据流">
+                <span>此浏览器</span><i>→</i><span>本应用</span><i>→</i><span>模型服务</span>
+              </div>
+              <ol class="setup-steps">
+                <li><b>添加配置</b><span>填写地址、模型和 API Key</span></li>
+                <li><b>测试连接</b><span>确认当前 Provider 可用</span></li>
+                <li><b>开始任务</b><span>Agent 会按优先级自动路由</span></li>
+              </ol>
+              <p class="settings-warning">共享电脑使用完毕后，请点击“清除此浏览器配置”。部署到其他设备时应使用 HTTPS。</p>
+            </aside>
+            <section class="llm-settings-form">
+              <div class="settings-form-head">
+                <div><span class="eyebrow">PRIVATE CREDENTIAL</span><h2>连接池</h2></div>
+                <span class="config-status" id="llmConfigStatus">尚未配置</span>
+              </div>
+              <div class="settings-grid">
+                <div class="pool-column">
+                  <div class="section-heading">
+                    <div><span class="eyebrow">ROUTING POOL</span><h3>可用 Provider</h3></div>
+                    <span class="section-hint">按优先级切换</span>
+                  </div>
+                  <div class="llm-pool-list" id="llmPoolList" aria-live="polite"></div>
+                  <div class="settings-actions">
+                    <button type="button" id="testLlmPoolButton">测试整个模型池</button>
+                    <button type="button" class="danger-button" id="clearLlmSettingsButton">清除此浏览器配置</button>
+                  </div>
+                </div>
+                <div class="endpoint-column">
+                  <div class="endpoint-editor-head"><div><span class="eyebrow" id="llmEditorEyebrow">ADD ENDPOINT</span><h3 id="llmEditorTitle">添加模型配置</h3></div><button class="text-button" id="cancelLlmEditButton" type="button" hidden>取消编辑</button></div>
+                  <form id="llmEndpointForm">
+                    <input id="llmEndpointId" type="hidden">
+                    <label class="settings-field" for="llmName"><span>配置名称</span><input id="llmName" type="text" autocomplete="off" placeholder="例如：DeepSeek 主账号" required></label>
+                    <label class="settings-field" for="llmBaseUrl"><span>API 地址</span><input id="llmBaseUrl" type="url" inputmode="url" autocomplete="url" placeholder="https://api.example.com/v1" required></label>
+                    <label class="settings-field" for="llmModel"><span>模型名称</span><input id="llmModel" type="text" autocomplete="off" placeholder="服务商提供的 model id" required></label>
+                    <label class="settings-field" for="llmApiKey"><span>API Key</span><div class="password-field"><input id="llmApiKey" type="password" autocomplete="new-password" placeholder="仅保存在此浏览器" required><button class="text-button" id="llmShowKey" type="button" aria-pressed="false">显示</button></div></label>
+                    <div class="endpoint-options"><label class="check-field"><input id="llmEnabled" type="checkbox" checked><span>启用此配置</span></label><label class="number-field"><span>优先级</span><input id="llmPriority" type="number" min="1" max="999" value="1"></label><label class="number-field"><span>权重</span><input id="llmWeight" type="number" min="1" max="100" value="1"></label></div>
+                    <div class="endpoint-actions"><button type="submit" id="saveLlmEndpointButton">添加到模型池</button><button type="button" class="secondary-button" id="testLlmEndpointButton">测试此配置</button></div>
+                  </form>
+                  <p class="field-help">保存后刷新页面或下次打开仍然有效；不同浏览器、不同设备互不共享。</p>
+                </div>
+              </div>
+            </section>
+          </div>
+        </section>
       </main>
 
       <footer class="app-footer" aria-label="页脚">
@@ -152,6 +206,6 @@
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="/static/app.js?v=6" defer></script>
+  <script src="/static/app.js?v=8" defer></script>
 </body>
 </html>

@@ -11,13 +11,14 @@ import time
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app import db
 from app.agent.runtime import AgentExecution, AgentResult, AgentRuntime
+from app.llm_router import LLMRouter, LLMRouterError, PoolEndpoint, parse_pool
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
@@ -91,14 +92,78 @@ def _reindex_quietly() -> None:
 class AgentAskReq(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     session_id: str | None = Field(default=None, max_length=80)
+    llm_pool: list[dict] = Field(default_factory=list, max_length=10)
 
 
 class AgentApprovalReq(BaseModel):
     approved: bool
+    llm_pool: list[dict] = Field(default_factory=list, max_length=10)
+
+
+class AgentContinueReq(BaseModel):
+    llm_pool: list[dict] = Field(default_factory=list, max_length=10)
+
+
+class LLMTestReq(BaseModel):
+    llm_pool: list[dict] = Field(default_factory=list, max_length=10)
 
 
 class AgentSessionRenameReq(BaseModel):
     title: str = Field(min_length=1, max_length=80)
+
+
+def _request_router(
+    entries: list[dict],
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
+) -> LLMRouter:
+    """Build a task-local router; headers remain as a legacy single-config path."""
+    payload = entries
+    if not payload and api_key and base_url and model:
+        payload = [{"name": "当前配置", "api_key": api_key, "base_url": base_url, "model": model}]
+    try:
+        return LLMRouter(parse_pool(payload))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+def _agent_runtime(router: LLMRouter) -> AgentRuntime:
+    return AgentRuntime(
+        chat=lambda messages, max_tokens=2000: router.chat(messages, max_tokens=max_tokens),
+        stream_chat=lambda messages, on_delta, max_tokens=2000: router.chat_stream(
+            messages, on_delta, max_tokens=max_tokens,
+        ),
+    )
+
+
+@app.post("/api/llm/test")
+def test_llm(req: LLMTestReq | None = None,
+             api_key: str | None = Header(default=None, alias="X-LLM-API-Key"),
+             base_url: str | None = Header(default=None, alias="X-LLM-Base-URL"),
+             model: str | None = Header(default=None, alias="X-LLM-Model")):
+    router = _request_router((req or LLMTestReq()).llm_pool, api_key, base_url, model)
+    try:
+        reply = router.chat([{"role": "user", "content": "只回复 OK"}], max_tokens=8)
+    except Exception as exc:
+        raise HTTPException(400, f"连接失败：{str(exc)[:900]}") from exc
+    return {"ok": True, "reply": reply[:20], "used": router.last_used}
+
+
+@app.post("/api/llm/pool/test")
+def test_llm_pool(req: LLMTestReq | None = None,
+                  api_key: str | None = Header(default=None, alias="X-LLM-API-Key"),
+                  base_url: str | None = Header(default=None, alias="X-LLM-Base-URL"),
+                  model: str | None = Header(default=None, alias="X-LLM-Model")):
+    return test_llm(req, api_key, base_url, model)
+
+
+@app.post("/api/llm/endpoint/test")
+def test_llm_endpoint(req: LLMTestReq | None = None,
+                      api_key: str | None = Header(default=None, alias="X-LLM-API-Key"),
+                      base_url: str | None = Header(default=None, alias="X-LLM-Base-URL"),
+                      model: str | None = Header(default=None, alias="X-LLM-Model")):
+    return test_llm(req, api_key, base_url, model)
 
 
 def _persist_agent_record(run_id: str, record: dict, result: AgentResult) -> None:
@@ -161,6 +226,8 @@ def _load_agent_record(run_id: str) -> dict | None:
     return {
         "execution": execution,
         "result": result,
+        "router": None,
+        "needs_credentials": True,
         "status": row["status"],
         "session_id": row["session_id"],
         "error": row["error"],
@@ -173,23 +240,34 @@ def _load_agent_record(run_id: str) -> dict | None:
 def _agent_payload(run_id: str, record: dict) -> dict:
     with record["lock"]:
         result = record["result"]
+        router = record.get("router")
+        llm_state = None
+        if router is not None:
+            llm_state = {
+                "last_used": router.last_used,
+                "cooldowns": [item.safe_info() for item in router.endpoints if item.cooldown_until > time.monotonic()],
+            }
         if result is None:
+            missing_credentials = record.get("needs_credentials", False)
             return {
                 "run_id": run_id,
                 "session_id": record.get("session_id"),
                 "question": record["execution"].question,
-                "status": record["execution"].status,
-                "error": record.get("error") or record["execution"].error,
+                "status": "interrupted" if missing_credentials else record["execution"].status,
+                "error": ("服务已重启，请重新提交模型池后继续" if missing_credentials
+                          else record.get("error") or record["execution"].error),
                 "answer": record["execution"].answer,
                 "sources": record["execution"].sources,
                 "plan": record["execution"].plan,
                 "steps": record["execution"].steps,
                 "pending_tool": record["execution"].pending_tool,
+                "llm": llm_state,
             }
         return {
             "run_id": run_id,
             "session_id": record.get("session_id"),
             "question": record["execution"].question,
+            "llm": llm_state,
             **result.as_dict(),
         }
 
@@ -204,18 +282,29 @@ def _run_agent(run_id: str, record: dict) -> None:
         record["status"] = result.status
     _persist_agent_record(run_id, record, result)
     _emit_agent_event(record, {"type": "done", "run": _agent_payload(run_id, record)})
+    if result.status in {"completed", "failed", "cancelled"}:
+        with record["lock"]:
+            record["router"] = None
+            record["pool"] = None
+            record["execution"].runtime = AgentRuntime()
 
 
 @app.post("/api/agent/ask")
-def agent_ask(req: AgentAskReq):
+def agent_ask(
+    req: AgentAskReq,
+    api_key: str | None = Header(default=None, alias="X-LLM-API-Key"),
+    base_url: str | None = Header(default=None, alias="X-LLM-Base-URL"),
+    model: str | None = Header(default=None, alias="X-LLM-Model"),
+):
     """异步启动一次 Agent 研究任务，返回 run_id 供前端轮询。"""
+    router = _request_router(req.llm_pool, api_key, base_url, model)
     run_id = uuid.uuid4().hex
     session_id = req.session_id or uuid.uuid4().hex
     latest = db.latest_agent_run(session_id) if req.session_id else None
     if latest and latest["status"] not in {"completed", "failed", "cancelled"}:
         raise HTTPException(409, "当前会话还有未完成的 Agent 任务，请先继续或结束它")
     if latest:
-        execution = AgentExecution.from_state(AgentRuntime(), json.loads(latest["state_json"]))
+        execution = AgentExecution.from_state(_agent_runtime(router), json.loads(latest["state_json"]))
         execution.question = req.question.strip()
         execution.messages.append({"role": "user", "content": execution.question})
         execution.sources = []
@@ -228,13 +317,16 @@ def agent_ask(req: AgentAskReq):
         execution.error = None
         execution.pending_tool = None
     else:
-        execution = AgentRuntime().start(req.question)
+        execution = _agent_runtime(router).start(req.question)
     db.create_agent_session(session_id, req.question[:80])
     db.create_agent_run(run_id, session_id, req.question, execution.to_state())
     record = {
         "execution": execution,
         "result": None,
         "status": "running",
+        "router": router,
+        "pool": router.endpoints,
+        "needs_credentials": False,
         "session_id": session_id,
         "lock": threading.RLock(),
         "subscribers": set(),
@@ -350,7 +442,10 @@ def agent_status(run_id: str):
 
 
 @app.post("/api/agent/{run_id}/approval")
-def agent_approval(run_id: str, req: AgentApprovalReq):
+def agent_approval(run_id: str, req: AgentApprovalReq,
+                   api_key: str | None = Header(default=None, alias="X-LLM-API-Key"),
+                   base_url: str | None = Header(default=None, alias="X-LLM-Base-URL"),
+                   model: str | None = Header(default=None, alias="X-LLM-Model")):
     record = _agent_runs.get(run_id)
     if record is None:
         record = _load_agent_record(run_id)
@@ -368,6 +463,13 @@ def agent_approval(run_id: str, req: AgentApprovalReq):
         record["execution"].on_text_delta = lambda delta, answer: _agent_text_delta(
             run_id, record, delta, answer,
         )
+        router = _request_router(req.llm_pool, api_key, base_url, model) if req.llm_pool else record.get("router")
+        if router is None:
+            raise HTTPException(401, "请重新提交模型池后再继续 Agent 任务")
+        record["router"] = router
+        record["pool"] = router.endpoints
+        record["needs_credentials"] = False
+        record["execution"].runtime = _agent_runtime(router)
         result = record["execution"].approve(req.approved, continue_run=False)
         record["result"] = result
         record["status"] = result.status
@@ -376,11 +478,22 @@ def agent_approval(run_id: str, req: AgentApprovalReq):
         with record["lock"]:
             record["result"] = None
         threading.Thread(target=_run_agent, args=(run_id, record), daemon=True).start()
+    elif result.status in {"completed", "failed", "cancelled"}:
+        with record["lock"]:
+            record["router"] = None
+            record["pool"] = None
+            record["execution"].runtime = AgentRuntime()
     return _agent_payload(run_id, record)
 
 
 @app.post("/api/agent/{run_id}/continue")
-def agent_continue(run_id: str):
+def agent_continue(
+    run_id: str,
+    req: AgentContinueReq | None = None,
+    api_key: str | None = Header(default=None, alias="X-LLM-API-Key"),
+    base_url: str | None = Header(default=None, alias="X-LLM-Base-URL"),
+    model: str | None = Header(default=None, alias="X-LLM-Model"),
+):
     """继续执行服务重启或达到步数上限后暂停的 Agent。"""
     record = _agent_runs.get(run_id)
     if record is None:
@@ -392,10 +505,18 @@ def agent_continue(run_id: str):
     with record["lock"]:
         if record["status"] not in {"interrupted", "paused"}:
             raise HTTPException(409, "当前 Agent 不需要继续执行")
+        request_pool = (req or AgentContinueReq()).llm_pool
+        router = _request_router(request_pool, api_key, base_url, model) if request_pool else record.get("router")
+        if router is None:
+            raise HTTPException(401, "请重新提交模型池后再继续 Agent 任务")
+        record["router"] = router
+        record["pool"] = router.endpoints
+        record["needs_credentials"] = False
         record["execution"].on_change = lambda current: _agent_changed(run_id, record, current)
         record["execution"].on_text_delta = lambda delta, answer: _agent_text_delta(
             run_id, record, delta, answer,
         )
+        record["execution"].runtime = _agent_runtime(router)
         record["execution"].status = "running"
         record["execution"].error = None
         record["result"] = None
@@ -428,6 +549,10 @@ def agent_cancel(run_id: str):
         record["result"] = result
         record["status"] = result.status
     _persist_agent_record(run_id, record, result)
+    with record["lock"]:
+        record["router"] = None
+        record["pool"] = None
+        record["execution"].runtime = AgentRuntime()
     return _agent_payload(run_id, record)
 
 
@@ -508,12 +633,17 @@ def videos(q: str = "", limit: int = 30, category: str = ""):
 
 class AskReq(BaseModel):
     question: str
+    llm_pool: list[dict] = Field(default_factory=list, max_length=10)
 
 
 @app.post("/api/ask")
-def ask(req: AskReq):
+def ask(req: AskReq,
+        api_key: str | None = Header(default=None, alias="X-LLM-API-Key"),
+        base_url: str | None = Header(default=None, alias="X-LLM-Base-URL"),
+        model: str | None = Header(default=None, alias="X-LLM-Model")):
     """检索问答：语义+关键词混合召回 → 命中片段作上下文喂给 LLM。"""
-    from app import llm, retriever
+    from app import retriever
+    router = _request_router(req.llm_pool, api_key, base_url, model)
 
     try:  # 索引缺失/内容变更 → 自动增量构建；向量模型缺失则退化为纯关键词
         from app import indexer
@@ -532,9 +662,13 @@ def ask(req: AskReq):
             "sources": [],
         }
     try:
-        answer = llm.answer(req.question, retriever.build_contexts(hits))
+        answer = router.chat(
+            [{"role": "system", "content": "根据收藏内容回答并标注来源。"},
+             {"role": "user", "content": req.question + "\n\n" + str(retriever.build_contexts(hits))}],
+            max_tokens=2000,
+        )
     except Exception as e:
-        return {"answer": f"AI 调用失败：{str(e)[:200]}", "sources": []}
+        return {"answer": f"AI 调用失败：{str(e)[:300]}", "sources": []}
     return {
         "answer": answer,
         "sources": [
@@ -548,6 +682,7 @@ class JobReq(BaseModel):
     n: int = 10
     all: bool = False  # True = 跑完全部剩余
     ids: list[str] = []  # 非空 = 只转写这些视频（搜索结果勾选）
+    llm_pool: list[dict] = Field(default_factory=list, max_length=10)
 
 
 @app.post("/api/transcribe")
@@ -581,9 +716,12 @@ def transcribe(req: JobReq):
 
 
 @app.post("/api/summarize")
-def summarize(req: JobReq):
+def summarize(req: JobReq,
+              api_key: str | None = Header(default=None, alias="X-LLM-API-Key"),
+              base_url: str | None = Header(default=None, alias="X-LLM-Base-URL"),
+              model: str | None = Header(default=None, alias="X-LLM-Model")):
     from app import db as _db
-    from app import llm
+    router = _request_router(req.llm_pool, api_key, base_url, model)
 
     total = _db.count_unsummarized() if req.all else min(req.n, _db.count_unsummarized())
 
@@ -598,7 +736,11 @@ def summarize(req: JobReq):
                 if _job["cancel"]:
                     return
                 _set_progress(done=done, total=total, progress=f"{row['title'][:20]}")
-                summary = llm.summarize(row["title"], row["author"], row["transcript"])
+                prompt = (
+                    f"请为视频生成 3-5 句话概要，不要编造信息。标题：{row['title']}"
+                    f" 作者：{row['author']} 转写：{row['transcript'][:8000]}"
+                )
+                summary = router.chat([{"role": "user", "content": prompt}], max_tokens=1500)
                 _db.set_summary(row["aweme_id"], summary)
                 done += 1
                 remaining -= 1
@@ -642,10 +784,8 @@ def load_categories() -> list[str]:
     return []
 
 
-def propose_categories() -> list[str] | None:
+def propose_categories(router: LLMRouter) -> list[str] | None:
     """抽样标题/标签让 LLM 设计一套贴合当前收藏夹的分类（6~12 个 + 兜底「其他」）。"""
-    from app import llm
-
     sample = db.sample_videos(100)
     if not sample:
         return None
@@ -658,7 +798,7 @@ def propose_categories() -> list[str] | None:
         '只输出 JSON 数组，格式 ["类别1", "类别2", ...]，不要输出任何其他文字。\n\n' + listing
     )
     try:
-        text = llm._chat([{"role": "user", "content": prompt}], max_tokens=500).strip()
+        text = router.chat([{"role": "user", "content": prompt}], max_tokens=500).strip()
         if text.startswith("```"):
             text = text.strip("`").lstrip("json").strip()
         cats = json.loads(text)
@@ -685,20 +825,22 @@ def categories():
 
 
 @app.post("/api/classify")
-def classify(req: JobReq):
+def classify(req: JobReq,
+             api_key: str | None = Header(default=None, alias="X-LLM-API-Key"),
+             base_url: str | None = Header(default=None, alias="X-LLM-Base-URL"),
+             model: str | None = Header(default=None, alias="X-LLM-Model")):
     """LLM 自动分类：首次先按收藏内容设计分类集合，再批量归类。"""
     import json as _json
+    router = _request_router(req.llm_pool, api_key, base_url, model)
 
     def run():
-        from app import llm
-
         cats = load_categories()
         if req.all:
             db.reset_categories()  # all=true：清空重分，且重新设计分类集合
             db.del_meta("categories")
             cats = []
         if not cats:
-            cats = propose_categories() or list(DEFAULT_CATEGORIES)
+            cats = propose_categories(router) or list(DEFAULT_CATEGORIES)
             db.set_meta("categories", _json.dumps(cats, ensure_ascii=False))
         cat_line = "、".join(cats)
         total = db.count_unclassified()
@@ -717,7 +859,7 @@ def classify(req: JobReq):
                 "只输出一个 JSON 对象，格式 {\"视频id\": \"类别\", ...}，不要输出任何其他文字。\n"
                 "视频列表（id|标题|作者|标签）：\n" + listing
             )
-            resp = llm._chat([{"role": "user", "content": prompt}], max_tokens=2000)
+            resp = router.chat([{"role": "user", "content": prompt}], max_tokens=2000)
             text = resp.strip()
             if text.startswith("```"):  # 剥掉可能的 markdown 代码围栏
                 text = text.strip("`").lstrip("json").strip()
