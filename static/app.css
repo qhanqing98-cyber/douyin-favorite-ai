@@ -405,6 +405,12 @@ main { min-height: 0; min-width: 0; overflow: hidden; }
 .history-time { margin-left: auto; color: var(--muted); }
 .history-row button { border: 0; color: var(--muted); background: transparent; cursor: pointer; transition: color 140ms, transform 140ms; }
 .history-row button:hover { color: var(--danger); transform: scale(1.15); }
+.trace-progress { margin-bottom: 10px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-deep); box-shadow: var(--shadow-in); }
+.trace-progress-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--ink-soft); font-size: 10px; }
+.trace-progress-head b { color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+.trace-progress-bar { height: 5px; margin-top: 8px; overflow: hidden; border-radius: 999px; background: var(--panel-high); }
+.trace-progress-bar i { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width 240ms var(--ease); }
+.trace-progress-note { overflow: hidden; margin-top: 6px; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Model settings */
 #viewSettings { overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding-bottom: 34px; }

@@ -420,12 +420,21 @@ function renderInspector(run) {
   }).join("") : `<div class="inspector-empty">开始研究后，这里会显示 Agent 的任务拆分。</div>`;
 
   const steps = run?.steps || [];
-  $("agentSteps").innerHTML = steps.length ? steps.map(step => {
+  const toolProgress = run?.tool_progress;
+  const progressHtml = toolProgress?.kind === "transcription" ? (() => {
+    const total = Math.max(1, Number(toolProgress.total) || 1);
+    const done = Math.min(total, Math.max(0, Number(toolProgress.done) || 0));
+    const percent = Math.round(done / total * 100);
+    const eta = Number.isFinite(toolProgress.eta_seconds) && toolProgress.eta_seconds >= 0
+      ? ` · 预计 ${formatDuration(toolProgress.eta_seconds)}` : "";
+    return `<div class="trace-progress"><div class="trace-progress-head"><span>转写进度</span><b>${done}/${total} · ${percent}%</b></div><div class="trace-progress-bar"><i style="width:${percent}%"></i></div><div class="trace-progress-note">${esc(toolProgress.title || "正在处理视频")}${eta}</div></div>`;
+  })() : "";
+  $("agentSteps").innerHTML = progressHtml + (steps.length ? steps.map(step => {
     const label = step.type === "final" ? "整理最终回答" : (step.type === "plan" ? "制定研究计划" : (step.type === "replan" ? "调整研究计划" : toolLabel(step.tool)));
     const cls = step.status === "completed" ? "done" : (step.status === "failed" || step.status === "rejected" ? "failed" : "waiting");
     const icon = step.status === "completed" ? "✓" : (step.status === "failed" ? "×" : (step.status === "rejected" ? "–" : "·"));
     return `<div class="trace-row ${cls}"><span class="trace-icon">${icon}</span><span>${esc(label)}</span></div>`;
-  }).join("") : `<div class="inspector-empty">工具调用会按时间出现在这里。</div>`;
+  }).join("") : `<div class="inspector-empty">工具调用会按时间出现在这里。</div>`);
 
   const sources = run?.sources || [];
   $("agentSources").innerHTML = sources.length ? sources.map(source => `
@@ -443,6 +452,12 @@ function renderApproval(run) {
   }
   if (["paused", "interrupted"].includes(run.status)) {
     container.innerHTML = `<div class="approval-card"><h3>研究暂时中断</h3><p>${esc(run.error || "可以从最近保存的步骤继续。")}</p><div class="approval-actions"><button class="secondary-button compact" data-agent-action="continue">继续研究</button></div></div>`;
+    return;
+  }
+  if (run.status === "failed" && run.error) {
+    const loginHint = /抖音|登录|cookie/i.test(run.error)
+      ? "请先到“数据维护”扫码登录抖音，再重新发起转写。" : "请根据错误信息处理后重新发起任务。";
+    container.innerHTML = `<div class="approval-card"><h3>研究失败</h3><p>${esc(run.error)}</p><p class="field-help">${loginHint}</p></div>`;
     return;
   }
   if (run.status === "waiting_approval" && run.pending_tool) {
@@ -846,12 +861,16 @@ async function pollJob() {
   catch (error) { toast(error.message, "error"); return; }
   if (job.running) {
     $("jobState").textContent = "运行中";
-    $("jobLine").textContent = `${job.name}：${job.progress}（已进行 ${formatDuration(job.elapsed)}）`;
+    const eta = Number.isFinite(job.eta_seconds) && job.eta_seconds >= 0
+      ? ` · 预计剩余 ${formatDuration(job.eta_seconds)}` : "";
+    $("jobLine").textContent = `${job.name}：${job.progress}（已进行 ${formatDuration(job.elapsed)}${eta}）`;
     $("btnCancel").hidden = false;
     if (job.total > 0) {
       const percent = Math.round(job.done / job.total * 100);
       $("bar").style.width = `${percent}%`;
-      $("bartext").textContent = `${job.done} / ${job.total} · ${percent}%`;
+      const eta = Number.isFinite(job.eta_seconds) && job.eta_seconds >= 0
+        ? ` · 预计 ${formatDuration(job.eta_seconds)}` : "";
+      $("bartext").textContent = `${job.done} / ${job.total} · ${percent}%${eta}`;
     } else {
       $("bar").style.width = "18%";
       $("bartext").textContent = "处理中";

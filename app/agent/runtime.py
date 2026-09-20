@@ -490,7 +490,10 @@ class AgentExecution:
 
             retries = 0
             while True:
-                result = self.runtime.registry.call(decision.tool, decision.args)
+                result = self.runtime.registry.call(
+                    decision.tool, decision.args,
+                    progress=self.runtime.tool_progress,
+                )
                 code = (result.get("error") or {}).get("code")
                 if result.get("ok") or code != "execution_error" or retries >= self.runtime.max_tool_retries:
                     break
@@ -534,7 +537,8 @@ class AgentExecution:
 
         pending = self.pending_tool
         result = self.runtime.registry.call(
-            pending["tool"], pending["args"], allow_write=True
+            pending["tool"], pending["args"], allow_write=True,
+            progress=self.runtime.tool_progress,
         )
         self.steps[-1]["status"] = "completed" if result["ok"] else "failed"
         self._set_task_status("completed" if result["ok"] else "failed")
@@ -558,6 +562,7 @@ class AgentRuntime:
 
     def __init__(self, chat: Callable[..., str] | None = None,
                  stream_chat: Callable[..., str] | None = None,
+                 tool_progress: Callable[..., None] | None = None,
                  registry: ToolRegistry = TOOLS, max_steps: int = MAX_STEPS,
                  timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
                  max_tool_retries: int = MAX_TOOL_RETRIES):
@@ -568,6 +573,7 @@ class AgentRuntime:
         if not 0 <= max_tool_retries <= MAX_TOOL_RETRIES:
             raise ValueError(f"max_tool_retries 必须在 0 到 {MAX_TOOL_RETRIES} 之间")
         self.registry = registry
+        self.tool_progress = tool_progress
         self.max_steps = max_steps
         self.timeout_seconds = timeout_seconds
         self.max_tool_retries = max_tool_retries

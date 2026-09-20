@@ -8,3 +8,4 @@ models/
 .env
 .workbuddy/
 .learnings/
+server-restart*.log

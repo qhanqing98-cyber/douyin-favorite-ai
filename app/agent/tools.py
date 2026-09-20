@@ -138,17 +138,22 @@ def _get_video(args: VideoArgs) -> dict:
     return _result(item, sources=[item])
 
 
-def _transcribe(args: VideoIdsArgs) -> dict:
+def _transcribe(args: VideoIdsArgs, progress=None) -> dict:
     from app import transcribe
 
     available = db.get_untranscribed(10**9, ids=args.ids)
     ids = [row["aweme_id"] for row in available]
     if not ids:
         return _result({"processed": 0, "message": "没有待转写的视频"})
-    processed = transcribe.run(limit=len(ids), ids=ids)
+    try:
+        report = transcribe.run(limit=len(ids), ids=ids, progress=progress)
+    except transcribe.LoginRequiredError as exc:
+        return _error(transcribe.LoginRequiredError.code, str(exc))
     return _result(
-        {"processed": processed, "requested": len(ids)},
-        affected_ids=ids,
+        {"processed": report.processed, "requested": report.requested,
+         "failed": report.failed, "elapsed_seconds": report.elapsed_seconds,
+         "average_seconds": report.average_seconds},
+        affected_ids=report.processed_ids,
     )
 
 
@@ -223,7 +228,7 @@ class ToolRegistry:
     def schemas(self) -> list[dict]:
         return [spec.schema() for spec in self._specs.values()]
 
-    def call(self, name: str, raw_args: dict, *, allow_write: bool = False) -> dict:
+    def call(self, name: str, raw_args: dict, *, allow_write: bool = False, progress=None) -> dict:
         """校验并调用工具；写工具必须显式传入 allow_write=True。"""
         spec = self.get(name)
         if spec is None:
@@ -247,7 +252,10 @@ class ToolRegistry:
         except Exception as exc:
             return _error("invalid_arguments", str(exc)[:300])
         try:
-            result = spec.handler(args)
+            if name == "transcribe_videos" and progress is not None:
+                result = spec.handler(args, progress)
+            else:
+                result = spec.handler(args)
             result["tool"] = name
             result["side_effect"] = spec.side_effect
             return result

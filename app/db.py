@@ -785,18 +785,19 @@ def dumps_tags(tag_list: list) -> str:
 # ---------- 阶段二：转写与概要 ----------
 
 def get_untranscribed(limit: int, ids: list[str] | None = None) -> list[sqlite3.Row]:
-    """还没转写的视频（transcript 为 NULL），新的优先；传 ids 时只查指定视频。"""
+    """还没得到真实转写的视频；历史的音频不可用占位文本也允许重试。"""
+    pending = "(transcript IS NULL OR transcript LIKE '【音频不可用】%')"
     with get_conn() as conn:
         if ids:
             marks = ",".join("?" * len(ids))
             return conn.execute(
                 f"""SELECT aweme_id, title, author FROM favorites
-                    WHERE transcript IS NULL AND aweme_id IN ({marks})""",
+                    WHERE {pending} AND aweme_id IN ({marks})""",
                 ids,
             ).fetchall()
         return conn.execute(
             """SELECT aweme_id, title, author FROM favorites
-               WHERE transcript IS NULL
+               WHERE (transcript IS NULL OR transcript LIKE '【音频不可用】%')
                ORDER BY crawled_at DESC LIMIT ?""",
             (limit,),
         ).fetchall()
@@ -816,7 +817,8 @@ def get_unsummarized(limit: int) -> list[sqlite3.Row]:
     with get_conn() as conn:
         return conn.execute(
             """SELECT aweme_id, title, author, transcript FROM favorites
-               WHERE transcript IS NOT NULL AND summary IS NULL
+               WHERE transcript IS NOT NULL AND transcript NOT LIKE '【%'
+                     AND summary IS NULL
                ORDER BY crawled_at DESC LIMIT ?""",
             (limit,),
         ).fetchall()
@@ -840,14 +842,16 @@ def get_video(aweme_id: str) -> sqlite3.Row | None:
 def count_untranscribed() -> int:
     with get_conn() as conn:
         return conn.execute(
-            "SELECT COUNT(*) FROM favorites WHERE transcript IS NULL"
+            "SELECT COUNT(*) FROM favorites "
+            "WHERE transcript IS NULL OR transcript LIKE '【音频不可用】%'"
         ).fetchone()[0]
 
 
 def count_unsummarized() -> int:
     with get_conn() as conn:
         return conn.execute(
-            "SELECT COUNT(*) FROM favorites WHERE transcript IS NOT NULL AND summary IS NULL"
+            "SELECT COUNT(*) FROM favorites "
+            "WHERE transcript IS NOT NULL AND transcript NOT LIKE '【%' AND summary IS NULL"
         ).fetchone()[0]
 
 
