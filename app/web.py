@@ -49,24 +49,31 @@ def _start_job(name: str, fn) -> None:
     def wrapper():
         cancelled = False
         error = ""
+        # 快照本次任务绑定的 job_id：_start_job 之后可能被下一个任务覆盖，
+        # 若在 finally 里再读 _job["id"]，会把终态写到新任务的数据库行上。
+        job_id = _job["id"]
         try:
             fn()
-            cancelled = _job["cancel"]
-            _job["progress"] = "已取消" if cancelled else "完成"
+            with _lock:
+                cancelled = _job["cancel"]
+            _set_progress(progress="已取消" if cancelled else "完成")
         except Exception as e:
             error = str(e)[:300]
-            _job["error"] = error
+            with _lock:
+                _job["error"] = error
         finally:
-            error = error or _job["error"]
+            with _lock:
+                error = error or _job["error"]
+                done, total = _job["done"], _job["total"]
+                _job["running"] = False
+                _job["eta_seconds"] = None
+                _job["eta_updated_at"] = 0.0
             status = "failed" if error else ("cancelled" if cancelled else "completed")
             db.finish_job(
-                _job["id"], status=status,
+                job_id, status=status,
                 progress="失败" if error else ("已取消" if cancelled else "完成"),
-                error=error, done=_job["done"], total=_job["total"],
+                error=error, done=done, total=total,
             )
-            _job["running"] = False
-            _job["eta_seconds"] = None
-            _job["eta_updated_at"] = 0.0
 
     threading.Thread(target=wrapper, daemon=True).start()
 
@@ -618,11 +625,14 @@ def agent_cancel(run_id: str):
 
 @app.post("/api/cancel")
 def cancel():
-    if not _job["running"]:
-        raise HTTPException(409, "当前没有在跑的任务")
-    _job["cancel"] = True
-    _job["progress"] = "取消中（等当前这条处理完）..."
-    db.update_job(_job["id"], cancel=1, progress=_job["progress"])
+    with _lock:
+        if not _job["running"]:
+            raise HTTPException(409, "当前没有在跑的任务")
+        _job["cancel"] = True
+        _job["progress"] = "取消中（等当前这条处理完）..."
+        job_id = _job["id"]
+    if job_id is not None:
+        db.update_job(job_id, cancel=1, progress="取消中（等当前这条处理完）...")
     return {"ok": True}
 
 
@@ -683,7 +693,11 @@ def stats():
 
 @app.get("/api/videos")
 def videos(q: str = "", limit: int = 30, category: str = ""):
-    """q 非空 → 全文搜索；否则按分类（可空）列收藏库。"""
+    """q 非空 → 全文搜索；否则按分类（可空）列收藏库。
+
+    limit 必须钳制：SQLite 把负数视为“无上限”，会一次拉回整表。
+    """
+    limit = max(1, min(limit, 200))
     if q.strip():
         rows = db.search(q, limit=limit)
         return {"mode": "search", "hits": [dict(r) for r in rows]}

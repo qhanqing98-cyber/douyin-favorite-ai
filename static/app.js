@@ -537,6 +537,7 @@ function newAgentSession(focus = true) {
   resizeComposer();
   showView("agent");
   renderSessions();
+  state.renderedTurns.clear(); // 新会话没有历史轮次，清空以免 Set 无界增长
   renderAgentWorkspace();
   if (focus) $("question").focus();
 }
@@ -606,6 +607,7 @@ function scheduleStreamRender() {
 
 function pollAgent(runId, sessionId = state.sessionId) {
   state.agentPoll = setTimeout(async () => {
+    state.agentPoll = null;
     if (sessionId !== state.sessionId || runId !== state.activeRunId) return;
     try {
       const run = await fetchJson(`/api/agent/${encodeURIComponent(runId)}`);
@@ -648,10 +650,9 @@ function watchAgent(runId, sessionId = state.sessionId) {
     if (payload.run) {
       mergeRun(payload.run);
       renderAgentWorkspace();
-      if (payload.run.status !== "running") {
-        stream.close();
-        state.agentStream = null;
-      }
+      // 终态时统一走 stopAgentWatch()：它会一并清掉轮询定时器和未执行的动画帧，
+      // 只 close() 会留下悬挂的 pollAgent 定时器继续请求已结束的任务。
+      if (payload.run.status !== "running") stopAgentWatch();
     }
     if (payload.type === "done") {
       stopAgentWatch();
