@@ -1,4 +1,6 @@
 const $ = id => document.getElementById(id);
+const LLM_POOL_KEY = "llmPool.v2";
+const LEGACY_LLM_SETTINGS_KEY = "llmSettings.v1";
 
 const state = {
   view: localStorage.getItem("activeView") || "agent",
@@ -24,11 +26,193 @@ function esc(value) {
   })[char]);
 }
 
-async function fetchJson(url, options) {
-  const response = await fetch(url, options);
+function normalizeLlmEndpoint(item, index = 0) {
+  return {
+    id: String(item.id || crypto.randomUUID?.() || `endpoint-${Date.now()}-${index}`),
+    name: String(item.name || `模型配置 ${index + 1}`),
+    base_url: String(item.base_url || item.baseUrl || "").trim().replace(/\/$/, ""),
+    model: String(item.model || "").trim(),
+    api_key: String(item.api_key || item.apiKey || "").trim(),
+    enabled: item.enabled !== false,
+    priority: Math.max(1, Number(item.priority) || 1),
+    weight: Math.max(1, Number(item.weight) || 1),
+  };
+}
+
+function loadLlmPool() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(LLM_POOL_KEY) || "null");
+    if (Array.isArray(stored?.endpoints)) return { version: 2, endpoints: stored.endpoints.map(normalizeLlmEndpoint) };
+    const legacy = JSON.parse(localStorage.getItem(LEGACY_LLM_SETTINGS_KEY) || "null");
+    if (legacy?.apiKey && legacy?.baseUrl && legacy?.model) {
+      return { version: 2, endpoints: [normalizeLlmEndpoint({ ...legacy, name: "迁移的模型配置" })] };
+    }
+  } catch { /* 损坏的本地配置按空池处理 */ }
+  return { version: 2, endpoints: [] };
+}
+
+function saveLlmPool(pool) {
+  const clean = { version: 2, endpoints: pool.endpoints.map(normalizeLlmEndpoint) };
+  localStorage.setItem(LLM_POOL_KEY, JSON.stringify(clean));
+  return clean;
+}
+
+function activeLlmPool() {
+  return loadLlmPool().endpoints.filter(endpoint => endpoint.enabled && endpoint.api_key && endpoint.base_url && endpoint.model);
+}
+
+function llmPoolPayload(endpoints = activeLlmPool()) {
+  return endpoints.map(endpoint => ({
+    id: endpoint.id, name: endpoint.name, base_url: endpoint.base_url,
+    model: endpoint.model, api_key: endpoint.api_key, enabled: endpoint.enabled,
+    priority: endpoint.priority, weight: endpoint.weight,
+  }));
+}
+
+function requestUsesLlm(url) {
+  return ["/api/ask", "/api/summarize", "/api/classify", "/api/llm/test", "/api/agent/ask"].includes(url)
+    || /\/api\/agent\/[^/]+\/(approval|continue)$/.test(url);
+}
+
+async function fetchJson(url, options = {}, poolOverride = null) {
+  const headers = new Headers(options.headers || {});
+  let body = options.body;
+  if (requestUsesLlm(url)) {
+    const pool = poolOverride || activeLlmPool();
+    if (body && typeof body === "string" && headers.get("Content-Type")?.includes("application/json")) {
+      try { body = JSON.stringify({ ...JSON.parse(body), llm_pool: llmPoolPayload(pool) }); } catch { /* 后端返回格式错误 */ }
+    } else if (!body) {
+      body = JSON.stringify({ llm_pool: llmPoolPayload(pool) });
+      headers.set("Content-Type", "application/json");
+    }
+  }
+  const response = await fetch(url, { ...options, body, headers });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.detail || `请求失败（${response.status}）`);
   return data;
+}
+
+function isSecureCredentialContext() {
+  return location.protocol === "https:" || ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
+}
+
+function readLlmForm() {
+  return {
+    id: $("llmEndpointId").value.trim(),
+    name: $("llmName").value.trim(),
+    baseUrl: $("llmBaseUrl").value.trim().replace(/\/$/, ""),
+    model: $("llmModel").value.trim(),
+    apiKey: $("llmApiKey").value.trim(),
+    enabled: $("llmEnabled").checked,
+    priority: Math.max(1, Number($("llmPriority").value) || 1),
+    weight: Math.max(1, Number($("llmWeight").value) || 1),
+  };
+}
+
+function validateLlmSettings(settings) {
+  if (!settings.name || !settings.baseUrl || !settings.model || !settings.apiKey) throw new Error("请完整填写配置名称、API 地址、模型名称和 API Key");
+  let parsed;
+  try { parsed = new URL(settings.baseUrl); } catch { throw new Error("API 地址格式不正确"); }
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
+  if (parsed.protocol !== "https:" && !(local && parsed.protocol === "http:")) throw new Error("远程 API 地址必须使用 HTTPS");
+  if (!isSecureCredentialContext()) throw new Error("当前页面不是 HTTPS，不能安全保存 API Key");
+  return settings;
+}
+
+function resetLlmEditor() {
+  $("llmEndpointId").value = "";
+  $("llmName").value = "";
+  $("llmBaseUrl").value = "";
+  $("llmModel").value = "";
+  $("llmApiKey").value = "";
+  $("llmEnabled").checked = true;
+  $("llmPriority").value = "1";
+  $("llmWeight").value = "1";
+  $("llmEditorEyebrow").textContent = "ADD ENDPOINT";
+  $("llmEditorTitle").textContent = "添加模型配置";
+  $("saveLlmEndpointButton").textContent = "添加到模型池";
+  $("cancelLlmEditButton").hidden = true;
+}
+
+function editLlmEndpoint(id) {
+  const endpoint = loadLlmPool().endpoints.find(item => item.id === id);
+  if (!endpoint) return;
+  $("llmEndpointId").value = endpoint.id;
+  $("llmName").value = endpoint.name;
+  $("llmBaseUrl").value = endpoint.base_url;
+  $("llmModel").value = endpoint.model;
+  $("llmApiKey").value = endpoint.api_key;
+  $("llmEnabled").checked = endpoint.enabled;
+  $("llmPriority").value = endpoint.priority;
+  $("llmWeight").value = endpoint.weight;
+  $("llmEditorEyebrow").textContent = "EDIT ENDPOINT";
+  $("llmEditorTitle").textContent = "编辑模型配置";
+  $("saveLlmEndpointButton").textContent = "保存此配置";
+  $("cancelLlmEditButton").hidden = false;
+  $("llmName").focus();
+}
+
+function renderLlmPool() {
+  const pool = loadLlmPool();
+  const list = $("llmPoolList");
+  if (!pool.endpoints.length) {
+    list.innerHTML = '<div class="pool-empty">还没有模型配置。添加至少一个 Provider 后，Agent 才能开始工作。</div>';
+  } else {
+    list.innerHTML = pool.endpoints
+      .sort((a, b) => a.priority - b.priority)
+      .map(endpoint => `<article class="pool-item ${endpoint.enabled ? "" : "disabled"}">
+        <div class="pool-item-main"><span class="pool-dot"></span><div><h3>${esc(endpoint.name)}</h3><p>${esc(endpoint.model)} · ${esc(endpoint.base_url)}</p></div></div>
+        <div class="pool-item-meta"><span>${endpoint.enabled ? "已启用" : "已停用"}</span><span>P${endpoint.priority} · W${endpoint.weight}</span><span>••••${esc(endpoint.api_key.slice(-4))}</span></div>
+        <div class="pool-item-actions"><button class="text-button" data-llm-edit="${esc(endpoint.id)}">编辑</button><button class="text-button" data-llm-toggle="${esc(endpoint.id)}">${endpoint.enabled ? "停用" : "启用"}</button><button class="text-button danger-text" data-llm-delete="${esc(endpoint.id)}">删除</button></div>
+      </article>`).join("");
+  }
+  const status = $("llmConfigStatus");
+  const active = activeLlmPool();
+  status.textContent = active.length ? `已配置 · ${active.length} 个可用` : "尚未配置";
+  status.classList.toggle("configured", Boolean(active.length));
+}
+
+function saveLlmEndpoint(event) {
+  event?.preventDefault();
+  try {
+    const input = validateLlmSettings(readLlmForm());
+    const pool = loadLlmPool();
+    const endpoint = normalizeLlmEndpoint({ ...input, base_url: input.baseUrl, api_key: input.apiKey });
+    const index = pool.endpoints.findIndex(item => item.id === endpoint.id);
+    if (index >= 0) pool.endpoints[index] = endpoint;
+    else pool.endpoints.push(endpoint);
+    saveLlmPool(pool);
+    renderLlmPool();
+    resetLlmEditor();
+    toast("模型配置已加入此浏览器的模型池");
+    return endpoint;
+  } catch (error) { toast(error.message, "error"); return null; }
+}
+
+function ensureLlmConfigured() {
+  if (activeLlmPool().length) return true;
+  showView("settings");
+  toast("请先在模型设置中添加至少一个可用配置", "error");
+  return false;
+}
+
+async function testLlmPool(endpoints = activeLlmPool(), button = $("testLlmPoolButton")) {
+  if (!endpoints.length) { toast("请先添加至少一个模型配置", "error"); return; }
+  button.disabled = true;
+  button.textContent = "测试中…";
+  try {
+    const result = await fetchJson("/api/llm/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ llm_pool: llmPoolPayload(endpoints) }) }, endpoints);
+    toast(result.ok ? `连接成功：${result.used?.name || "模型配置"}` : "模型响应异常", result.ok ? "ok" : "error");
+  } catch (error) { toast(error.message, "error"); }
+  finally { button.disabled = false; button.textContent = endpoints.length > 1 ? "测试整个模型池" : "测试此配置"; }
+}
+
+function clearLlmSettings() {
+  localStorage.removeItem(LLM_POOL_KEY);
+  localStorage.removeItem(LEGACY_LLM_SETTINGS_KEY);
+  renderLlmPool();
+  resetLlmEditor();
+  toast("已清除此浏览器中的模型配置");
 }
 
 let toastTimer;
@@ -225,7 +409,8 @@ function renderInspector(run) {
   const status = run?.status || "";
   const statusElement = $("agentRunStatus");
   statusElement.className = `run-status ${esc(status)}`;
-  statusElement.textContent = statusLabel(status);
+  const used = run?.llm?.last_used;
+  statusElement.textContent = used?.name ? `${statusLabel(status)} · ${used.name}` : statusLabel(status);
 
   const plan = run?.plan || [];
   $("agentPlan").innerHTML = plan.length ? plan.map(task => {
@@ -466,6 +651,7 @@ async function askAgent(event) {
   event?.preventDefault();
   const question = $("question").value.trim();
   if (!question) return;
+  if (!ensureLlmConfigured()) return;
   const token = state.sessionToken;
   const originalSessionId = state.sessionId;
   const optimistic = {
@@ -505,12 +691,16 @@ async function askAgent(event) {
 async function agentAction(action) {
   const run = latestRun();
   if (!run) return;
+  if (["approve", "reject", "continue"].includes(action) && !ensureLlmConfigured()) return;
   let url = `/api/agent/${encodeURIComponent(run.run_id)}`;
   let options = { method: "POST" };
   if (action === "approve" || action === "reject") {
     url += "/approval";
-    options = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ approved: action === "approve" }) };
-  } else if (action === "continue") url += "/continue";
+    options = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ approved: action === "approve", llm_pool: llmPoolPayload() }) };
+  } else if (action === "continue") {
+    url += "/continue";
+    options = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ llm_pool: llmPoolPayload() }) };
+  }
   else if (action === "cancel") url += "/cancel";
   else return;
 
@@ -631,6 +821,7 @@ const jobButtonIds = ["btnTr", "btnTrAll", "btnSum", "btnSumAll", "btnCls", "btn
 function setJobButtons(disabled) { jobButtonIds.forEach(id => { $(id).disabled = disabled; }); }
 
 async function runJob(url, n = 0, all = false) {
+  if (["/api/summarize", "/api/classify"].includes(url) && !ensureLlmConfigured()) return;
   try {
     await fetchJson(url, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -742,6 +933,41 @@ function bindEvents() {
     if (button) agentAction(button.dataset.agentAction);
   });
 
+  $("llmEndpointForm").addEventListener("submit", saveLlmEndpoint);
+  $("testLlmEndpointButton").addEventListener("click", () => {
+    try {
+      const endpoint = validateLlmSettings(readLlmForm());
+      testLlmPool([normalizeLlmEndpoint({ ...endpoint, base_url: endpoint.baseUrl, api_key: endpoint.apiKey })], $("testLlmEndpointButton"));
+    } catch (error) { toast(error.message, "error"); }
+  });
+  $("testLlmPoolButton").addEventListener("click", () => testLlmPool());
+  $("cancelLlmEditButton").addEventListener("click", resetLlmEditor);
+  $("clearLlmSettingsButton").addEventListener("click", clearLlmSettings);
+  $("llmShowKey").addEventListener("click", () => {
+    const input = $("llmApiKey");
+    const visible = input.type === "text";
+    input.type = visible ? "password" : "text";
+    $("llmShowKey").textContent = visible ? "显示" : "隐藏";
+    $("llmShowKey").setAttribute("aria-pressed", String(!visible));
+  });
+  $("llmPoolList").addEventListener("click", event => {
+    const edit = event.target.closest("[data-llm-edit]");
+    if (edit) return editLlmEndpoint(edit.dataset.llmEdit);
+    const toggle = event.target.closest("[data-llm-toggle]");
+    if (toggle) {
+      const pool = loadLlmPool();
+      const endpoint = pool.endpoints.find(item => item.id === toggle.dataset.llmToggle);
+      if (endpoint) { endpoint.enabled = !endpoint.enabled; saveLlmPool(pool); renderLlmPool(); }
+      return;
+    }
+    const remove = event.target.closest("[data-llm-delete]");
+    if (remove) {
+      const pool = loadLlmPool();
+      pool.endpoints = pool.endpoints.filter(item => item.id !== remove.dataset.llmDelete);
+      saveLlmPool(pool); renderLlmPool(); toast("模型配置已删除");
+    }
+  });
+
   $("librarySearchForm").addEventListener("submit", searchLibrary);
   $("showLibraryButton").addEventListener("click", loadLibrary);
   $("btnSel").addEventListener("click", transcribeSelected);
@@ -793,6 +1019,8 @@ function bindEvents() {
 
 async function initialize() {
   bindEvents();
+  renderLlmPool();
+  resetLlmEditor();
   showView(state.view);
   renderAgentWorkspace();
   await Promise.all([loadStats(), loadCategories(), loadAgentSessions()]);
