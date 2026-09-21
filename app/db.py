@@ -959,10 +959,55 @@ def get_unclassified(limit: int) -> list[sqlite3.Row]:
         ).fetchall()
 
 
+def get_classification_rows(limit: int, offset: int = 0,
+                            *, only_unclassified: bool = True) -> list[sqlite3.Row]:
+    """稳定分页读取分类输入；全量重分时不能先清空旧分类。"""
+    limit = _clamp_limit(limit)
+    offset = max(0, int(offset or 0))
+    where = "WHERE category IS NULL" if only_unclassified else ""
+    with get_conn() as conn:
+        return conn.execute(
+            f"""SELECT aweme_id, title, tags, author FROM favorites
+                {where} ORDER BY rowid LIMIT ? OFFSET ?""",
+            (limit, offset),
+        ).fetchall()
+
+
 def set_category(aweme_id: str, category: str) -> None:
     with get_conn() as conn:
         conn.execute(
             "UPDATE favorites SET category = ? WHERE aweme_id = ?", (category, aweme_id)
+        )
+
+
+def set_categories(assignments: dict[str, str]) -> None:
+    """在一个事务中写入一批分类，避免只提交半批数据。"""
+    if not assignments:
+        return
+    with get_conn() as conn:
+        conn.executemany(
+            "UPDATE favorites SET category = ? WHERE aweme_id = ?",
+            [(category, aweme_id) for aweme_id, category in assignments.items()],
+        )
+
+
+def replace_all_categories(assignments: dict[str, str], categories: list[str]) -> None:
+    """原子替换全库分类和分类集合；输入不完整时拒绝破坏旧数据。"""
+    with get_conn() as conn:
+        current_ids = {
+            str(row[0]) for row in conn.execute("SELECT aweme_id FROM favorites").fetchall()
+        }
+        if set(assignments) != current_ids:
+            raise ValueError("分类结果不完整，已保留原有分类")
+        conn.execute("UPDATE favorites SET category = NULL")
+        conn.executemany(
+            "UPDATE favorites SET category = ? WHERE aweme_id = ?",
+            [(category, aweme_id) for aweme_id, category in assignments.items()],
+        )
+        conn.execute(
+            "INSERT INTO meta(key, value) VALUES('categories', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (json.dumps(categories, ensure_ascii=False),),
         )
 
 
