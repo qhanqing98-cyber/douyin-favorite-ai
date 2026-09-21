@@ -801,6 +801,10 @@ function librarySkeleton() {
 async function loadCategories() {
   try {
     const data = await fetchJson("/api/categories");
+    const validCategories = new Set((data.counts || []).map(item => item.category));
+    if (state.category && state.category !== "__none__" && !validCategories.has(state.category)) {
+      state.category = "";
+    }
     const items = [
       `<button class="chip${state.category === "" ? " active" : ""}" data-category="">全部</button>`,
       ...(data.counts || []).map(item => `<button class="chip${item.category === state.category ? " active" : ""}" data-category="${esc(item.category)}">${esc(item.category)}<b>${item.n}</b></button>`),
@@ -947,8 +951,9 @@ async function pollJob() {
     if (job.error) $("jobLine").textContent = `${job.name} 失败：${job.error}`;
     else if (["完成", "已取消"].includes(job.progress)) {
       $("jobLine").textContent = `${job.name} · ${job.progress}`;
-      loadStats(); loadCategories();
-      if (state.libraryMode === "library") loadLibrary();
+      await loadStats();
+      await loadCategories();
+      if (state.libraryMode === "library") await loadLibrary();
     } else $("jobLine").textContent = "当前没有运行中的任务。";
   }
   renderJobHistory(job.history || []);
