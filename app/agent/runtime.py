@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal
@@ -230,6 +231,7 @@ class AgentExecution:
         self.answer = ""
         self.error: str | None = None
         self.pending_tool: dict | None = None
+        self._cancel_event = threading.Event()
         # 连续被拒绝的重复规划次数；用于在提示无效时终止，避免空转到 max_steps。
         self.replan_rejections = 0
 
@@ -376,6 +378,8 @@ class AgentExecution:
 
         deadline = time.monotonic() + self.runtime.timeout_seconds
         while self.step_no < self.runtime.max_steps:
+            if self._cancel_event.is_set():
+                return self._result()
             if time.monotonic() >= deadline:
                 self.status = "paused"
                 self.error = f"Agent 执行超过 {self.runtime.timeout_seconds:g} 秒，已暂停"
@@ -390,6 +394,8 @@ class AgentExecution:
                 self.status = "failed"
                 self.error = str(exc)
                 self._checkpoint()
+                return self._result()
+            if self._cancel_event.is_set():
                 return self._result()
             if time.monotonic() >= deadline:
                 self.status = "paused"
@@ -522,6 +528,8 @@ class AgentExecution:
                 result = self.runtime.registry.call(
                     decision.tool, decision.args,
                     progress=self.runtime.tool_progress,
+                    llm_chat=self.runtime._chat,
+                    should_stop=self._cancel_event.is_set,
                 )
                 code = (result.get("error") or {}).get("code")
                 if result.get("ok") or code != "execution_error" or retries >= self.runtime.max_tool_retries:
@@ -552,6 +560,38 @@ class AgentExecution:
         if self.on_text_delta:
             self.on_text_delta(delta, answer)
 
+    def begin_approval(self) -> dict:
+        """原子地取走待批准工具，并先把状态切换为 running。"""
+        if self.status != "waiting_approval" or not self.pending_tool:
+            raise ValueError("当前没有待批准操作")
+        pending = self.pending_tool
+        self.pending_tool = None
+        self.status = "running"
+        self.error = None
+        self.steps[-1]["status"] = "running"
+        self._set_task_status("running")
+        self._checkpoint()
+        return pending
+
+    def execute_approved_tool(self, pending: dict, *, continue_run: bool = True) -> AgentResult:
+        """执行已经取出的写工具；可由 Web 后台线程调用。"""
+        result = self.runtime.registry.call(
+            pending["tool"], pending["args"], allow_write=True,
+            progress=self.runtime.tool_progress,
+            llm_chat=self.runtime._chat,
+            should_stop=self._cancel_event.is_set,
+        )
+        if self._cancel_event.is_set():
+            self.steps[-1]["status"] = "cancelled"
+            self._set_task_status("cancelled")
+            self._checkpoint()
+            return self._result()
+        self.steps[-1]["status"] = "completed" if result["ok"] else "failed"
+        self._set_task_status("completed" if result["ok"] else "failed")
+        self._observe(pending["tool"], result)
+        self._checkpoint()
+        return self.advance() if continue_run else self._result()
+
     def approve(self, approved: bool, *, continue_run: bool = True) -> AgentResult:
         """批准或拒绝当前待执行的写工具；批准后继续原上下文。"""
         if self.status != "waiting_approval" or not self.pending_tool:
@@ -563,22 +603,12 @@ class AgentExecution:
             self.error = "用户拒绝了写操作"
             self._checkpoint()
             return self._result()
-
-        pending = self.pending_tool
-        result = self.runtime.registry.call(
-            pending["tool"], pending["args"], allow_write=True,
-            progress=self.runtime.tool_progress,
-        )
-        self.steps[-1]["status"] = "completed" if result["ok"] else "failed"
-        self._set_task_status("completed" if result["ok"] else "failed")
-        self._observe(pending["tool"], result)
-        self.pending_tool = None
-        self.status = "running"
-        self._checkpoint()
-        return self.advance() if continue_run else self._result()
+        pending = self.begin_approval()
+        return self.execute_approved_tool(pending, continue_run=continue_run)
 
     def cancel(self) -> AgentResult:
         """取消当前执行，不执行待批准工具。"""
+        self._cancel_event.set()
         self.pending_tool = None
         self.status = "cancelled"
         self.error = "用户取消了 Agent 任务"
