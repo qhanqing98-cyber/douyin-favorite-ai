@@ -63,6 +63,21 @@ def _reasoning_model(model: str) -> bool:
     return normalized.startswith(("gpt-5", "o1", "o3", "o4"))
 
 
+def _enabled_value(value) -> bool:
+    """只接受明确的布尔值/常见布尔字符串，避免 bool("false") == True。"""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return True
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    raise ValueError("enabled 必须是布尔值")
+
+
 @dataclass
 class PoolEndpoint:
     name: str
@@ -104,7 +119,7 @@ class PoolEndpoint:
             raise ValueError("模型配置 ID 过长")
         return cls(
             name=name, base_url=base_url, model=model, api_key=api_key,
-            endpoint_id=endpoint_id, enabled=bool(payload.get("enabled", True)),
+            endpoint_id=endpoint_id, enabled=_enabled_value(payload.get("enabled")),
             priority=priority, weight=weight,
         )
 
@@ -130,6 +145,9 @@ def parse_pool(payload: list[dict] | None) -> list[PoolEndpoint]:
     if len(payload) > MAX_POOL_SIZE:
         raise ValueError(f"模型池最多支持 {MAX_POOL_SIZE} 个配置")
     endpoints = [PoolEndpoint.from_payload(item) for item in payload]
+    endpoint_ids = [item.endpoint_id for item in endpoints]
+    if len(endpoint_ids) != len(set(endpoint_ids)):
+        raise ValueError("模型池中的配置 ID 不能重复")
     if not any(item.enabled for item in endpoints):
         raise ValueError("模型池中至少要启用一个配置")
     return endpoints
@@ -207,26 +225,34 @@ class LLMRouter:
         for endpoint in self.endpoints:
             if endpoint.enabled:
                 groups.setdefault(endpoint.model, []).append(endpoint)
-        return [sorted(items, key=lambda item: (item.priority, item.endpoint_id))
-                for items in sorted(groups.values(), key=lambda items: (items[0].priority, items[0].model))]
+        return [
+            sorted(items, key=lambda item: (item.priority, item.endpoint_id))
+            for items in sorted(
+                groups.values(),
+                key=lambda items: (min(item.priority for item in items), items[0].model),
+            )
+        ]
 
     def _ordered(self, group: list[PoolEndpoint]) -> list[PoolEndpoint]:
-        key = (group[0].model, "pool")
-        weighted: list[PoolEndpoint] = []
-        for endpoint in group:
-            weighted.extend([endpoint] * endpoint.weight)
-        if not weighted:
-            return []
-        with self._lock:
-            start = self._cursor.get(key, 0) % len(weighted)
-            self._cursor[key] = (start + 1) % len(weighted)
         result: list[PoolEndpoint] = []
-        seen: set[str] = set()
-        for offset in range(len(weighted)):
-            endpoint = weighted[(start + offset) % len(weighted)]
-            if endpoint.endpoint_id not in seen:
-                result.append(endpoint)
-                seen.add(endpoint.endpoint_id)
+        # 优先级是硬边界：只有当前优先级全部失败/冷却后，才尝试下一层。
+        # 权重轮询只发生在同模型、同优先级的 Key 之间。
+        priorities = sorted({endpoint.priority for endpoint in group})
+        for priority in priorities:
+            tier = [endpoint for endpoint in group if endpoint.priority == priority]
+            weighted = [endpoint for endpoint in tier for _ in range(endpoint.weight)]
+            if not weighted:
+                continue
+            key = (group[0].model, str(priority))
+            with self._lock:
+                start = self._cursor.get(key, 0) % len(weighted)
+                self._cursor[key] = (start + 1) % len(weighted)
+            seen: set[str] = set()
+            for offset in range(len(weighted)):
+                endpoint = weighted[(start + offset) % len(weighted)]
+                if endpoint.endpoint_id not in seen:
+                    result.append(endpoint)
+                    seen.add(endpoint.endpoint_id)
         return result
 
     @staticmethod
@@ -260,7 +286,6 @@ class LLMRouter:
         errors: list[str] = []
         for group in self._groups():
             group_errors = []
-            nonretryable_error = False
             for endpoint in self._ordered(group):
                 if not self._available(endpoint):
                     continue
@@ -277,13 +302,10 @@ class LLMRouter:
                         )
                     self._mark_failure(endpoint, error)
                     group_errors.append(f"{endpoint.name}: {error}")
-                    nonretryable_error = nonretryable_error or not error.retryable
                     if on_delta is not None and getattr(exc, "_llm_stream_started", False):
                         raise error from exc
             if group_errors:
                 errors.extend(group_errors)
-                if nonretryable_error:
-                    raise LLMRouterError("模型配置不可用：" + "；".join(group_errors)[:900])
         if errors:
             raise LLMRouterError("所有可用模型配置均失败：" + "；".join(errors)[:900])
         raise LLMRouterError("模型池中的配置都在冷却中，请稍后重试")

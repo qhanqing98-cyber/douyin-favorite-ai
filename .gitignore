@@ -9,3 +9,4 @@ models/
 .workbuddy/
 .learnings/
 server-restart*.log
+server.*.log

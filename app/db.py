@@ -508,16 +508,19 @@ def recent_jobs(limit: int = 20) -> list[dict]:
     return result
 
 
-def delete_job(job_id: int) -> None:
-    """删除一条任务历史，不影响收藏数据。"""
+def delete_job(job_id: int) -> bool:
+    """删除一条已结束的任务历史；运行中任务必须保留以便恢复。"""
     with get_conn() as conn:
-        conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        cursor = conn.execute(
+            "DELETE FROM jobs WHERE id = ? AND status != 'running'", (job_id,),
+        )
+    return cursor.rowcount > 0
 
 
 def clear_jobs() -> None:
-    """清空任务历史，不影响收藏数据。"""
+    """清空已结束的任务历史，不影响收藏数据和运行中任务。"""
     with get_conn() as conn:
-        conn.execute("DELETE FROM jobs")
+        conn.execute("DELETE FROM jobs WHERE status != 'running'")
 
 
 def create_agent_session(session_id: str, title: str) -> None:
