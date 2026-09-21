@@ -53,7 +53,15 @@ def main() -> int:
         assert interrupted["result"] is None
         assert web._agent_payload(interrupted_id, interrupted)["status"] == "interrupted"
 
-    print("Web state tests: 2/2 passed")
+        # A history cleanup must not erase a task that still owns live progress.
+        running_job = db.create_job("running")
+        assert db.delete_job(running_job) is False
+        db.clear_jobs()
+        assert any(item["id"] == running_job for item in db.recent_jobs())
+        db.finish_job(running_job, "completed")
+        assert db.delete_job(running_job) is True
+
+    print("Web state tests: 3/3 passed")
     return 0
 
 

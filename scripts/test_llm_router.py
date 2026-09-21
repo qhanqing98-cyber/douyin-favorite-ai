@@ -47,6 +47,47 @@ def test_fallback_model_group():
         assert router.chat([{"role": "user", "content": "hi"}]) == "fallback-ok"
 
 
+def test_nonretryable_error_still_uses_fallback_model():
+    router = LLMRouter([endpoint("invalid", "model-a"), endpoint("fallback", "model-b", 2)])
+    failure = ProviderRequestError("invalid model", retryable=False, status_code=404)
+    with patch.object(OpenAICompatibleProvider, "chat", side_effect=[failure, "fallback-ok"]):
+        assert router.chat([{"role": "user", "content": "hi"}]) == "fallback-ok"
+
+
+def test_lower_priority_key_is_not_rotated_ahead_of_primary():
+    router = LLMRouter([
+        endpoint("primary", "same-model", 1),
+        endpoint("secondary", "same-model", 2),
+    ])
+
+    def reply(selected, messages, max_tokens):
+        return selected.name
+
+    with patch.object(OpenAICompatibleProvider, "chat", side_effect=reply):
+        assert router.chat([{"role": "user", "content": "one"}]) == "primary"
+        assert router.chat([{"role": "user", "content": "two"}]) == "primary"
+
+
+def test_duplicate_ids_and_string_booleans_are_validated():
+    base = {
+        "name": "one", "base_url": "https://example.test/v1",
+        "model": "demo", "api_key": "secret", "id": "duplicate",
+    }
+    try:
+        parse_pool([base, {**base, "name": "two"}])
+    except ValueError as exc:
+        assert "ID" in str(exc)
+    else:
+        raise AssertionError("duplicate endpoint IDs must be rejected")
+
+    try:
+        parse_pool([{**base, "id": "disabled", "enabled": "false"}])
+    except ValueError as exc:
+        assert "启用" in str(exc)
+    else:
+        raise AssertionError("string false must disable the endpoint")
+
+
 def test_all_cooling_is_safe_error():
     router = LLMRouter([endpoint("only")])
     failure = ProviderRequestError("rate limited", retryable=True, status_code=429)

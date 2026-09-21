@@ -332,10 +332,7 @@ def _run_agent(run_id: str, record: dict) -> None:
     try:
         result = record["execution"].advance()
     except Exception as exc:
-        error = str(exc)[:300]
-        record["execution"].status = "failed"
-        record["execution"].error = error
-        result = AgentResult(status="failed", error=error)
+        result = record["execution"].fail(str(exc))
     with record["lock"]:
         record["result"] = result
         record["status"] = result.status
@@ -353,10 +350,7 @@ def _run_approved_agent(run_id: str, record: dict, pending: dict) -> None:
     try:
         result = record["execution"].execute_approved_tool(pending, continue_run=True)
     except Exception as exc:
-        error = str(exc)[:300]
-        record["execution"].status = "failed"
-        record["execution"].error = error
-        result = AgentResult(status="failed", error=error)
+        result = record["execution"].fail(str(exc))
     with record["lock"]:
         record["result"] = result
         record["status"] = result.status
@@ -377,6 +371,9 @@ def agent_ask(
     model: str | None = Header(default=None, alias="X-LLM-Model"),
 ):
     """异步启动一次 Agent 研究任务，返回 run_id 供前端轮询。"""
+    question = req.question.strip()
+    if not question:
+        raise HTTPException(400, "问题不能为空")
     router = _request_router(req.llm_pool, api_key, base_url, model)
     run_id = uuid.uuid4().hex
     session_id = req.session_id or uuid.uuid4().hex
@@ -385,21 +382,23 @@ def agent_ask(
         raise HTTPException(409, "当前会话还有未完成的 Agent 任务，请先继续或结束它")
     if latest:
         execution = AgentExecution.from_state(_agent_runtime(router), json.loads(latest["state_json"]))
-        execution.question = req.question.strip()
+        execution.question = question
         execution.messages.append({"role": "user", "content": execution.question})
         execution.sources = []
         execution.steps = []
         execution.plan = []
         execution.active_task_id = None
         execution.step_no = 0
+        execution.step_limit = execution.runtime.max_steps
         execution.status = "running"
         execution.answer = ""
         execution.error = None
         execution.pending_tool = None
+        execution.replan_rejections = 0
     else:
-        execution = _agent_runtime(router).start(req.question)
-    db.create_agent_session(session_id, req.question[:80])
-    db.create_agent_run(run_id, session_id, req.question, execution.to_state())
+        execution = _agent_runtime(router).start(question)
+    db.create_agent_session(session_id, question[:80])
+    db.create_agent_run(run_id, session_id, question, execution.to_state())
     record = {
         "execution": execution,
         "result": None,
@@ -432,7 +431,7 @@ def agent_ask(
             for rid, _ in removable[: max(0, len(_agent_runs) - 20)]:
                 _agent_runs.pop(rid, None)
     threading.Thread(target=_run_agent, args=(run_id, record), daemon=True).start()
-    return {"run_id": run_id, "session_id": session_id, "question": req.question.strip(), "status": "running"}
+    return {"run_id": run_id, "session_id": session_id, "question": question, "status": "running"}
 
 
 @app.get("/api/agent/history")
@@ -457,9 +456,12 @@ def agent_session_detail(session_id: str):
 
 @app.patch("/api/agent/sessions/{session_id}")
 def agent_session_rename(session_id: str, req: AgentSessionRenameReq):
-    if not db.rename_agent_session(session_id, req.title):
+    title = req.title.strip()
+    if not title:
+        raise HTTPException(400, "会话标题不能为空")
+    if not db.rename_agent_session(session_id, title):
         raise HTTPException(404, "会话不存在")
-    return {"ok": True, "session_id": session_id, "title": req.title.strip()}
+    return {"ok": True, "session_id": session_id, "title": title}
 
 
 @app.delete("/api/agent/sessions/{session_id}")
@@ -623,8 +625,9 @@ def agent_continue(
         record["execution"].runtime.tool_progress = lambda done, total, title: _agent_tool_progress(
             run_id, record, done, total, title,
         )
-        record["execution"].status = "running"
-        record["execution"].error = None
+        record["execution"].prepare_resume(
+            extend_budget=record["status"] == "paused",
+        )
         record["result"] = None
         record["status"] = "running"
         record["error"] = ""
@@ -677,7 +680,8 @@ def cancel():
 
 @app.delete("/api/history/{hid}")
 def delete_history(hid: int):
-    db.delete_job(hid)
+    if not db.delete_job(hid):
+        raise HTTPException(409, "任务不存在或仍在运行，不能删除")
     return {"ok": True}
 
 
@@ -745,7 +749,7 @@ def videos(q: str = "", limit: int = 30, category: str = ""):
 
 
 class AskReq(BaseModel):
-    question: str
+    question: str = Field(min_length=1, max_length=2000)
     llm_pool: list[dict] = Field(default_factory=list, max_length=10)
 
 
@@ -756,6 +760,9 @@ def ask(req: AskReq,
         model: str | None = Header(default=None, alias="X-LLM-Model")):
     """检索问答：语义+关键词混合召回 → 命中片段作上下文喂给 LLM。"""
     from app import retriever
+    question = req.question.strip()
+    if not question:
+        raise HTTPException(400, "问题不能为空")
     router = _request_router(req.llm_pool, api_key, base_url, model)
 
     try:  # 索引缺失/内容变更 → 自动增量构建；向量模型缺失则退化为纯关键词
@@ -765,7 +772,7 @@ def ask(req: AskReq,
     except Exception:
         pass
     try:
-        hits = retriever.hybrid_search(req.question)
+        hits = retriever.hybrid_search(question)
     except Exception as e:
         return {"answer": f"检索失败：{str(e)[:200]}", "sources": []}
     if not hits:
@@ -777,7 +784,7 @@ def ask(req: AskReq,
     try:
         answer = router.chat(
             [{"role": "system", "content": "根据收藏内容回答并标注来源。"},
-             {"role": "user", "content": req.question + "\n\n" + str(retriever.build_contexts(hits))}],
+             {"role": "user", "content": question + "\n\n" + str(retriever.build_contexts(hits))}],
             max_tokens=2000,
         )
     except Exception as e:

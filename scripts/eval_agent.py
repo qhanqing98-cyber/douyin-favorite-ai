@@ -194,6 +194,15 @@ def test_approval_gate() -> None:
     assert completed.status == "completed"
     assert len(writes) == 1
 
+    rejected_execution = AgentRuntime(
+        chat=scripted_chat(['{"type":"tool_call","tool":"lookup","args":{}}']),
+        registry=registry,
+    ).start("reject")
+    assert rejected_execution.advance().status == "waiting_approval"
+    rejected = rejected_execution.approve(False)
+    assert rejected.status == "cancelled"
+    assert rejected_execution.steps[-1]["status"] == "rejected"
+
 
 def test_deferred_approval_handoff() -> None:
     """Web 可以先返回 running，再在后台执行耗时写工具。"""
@@ -293,6 +302,27 @@ def test_timeout() -> None:
     assert result.error
 
 
+def test_step_limit_can_be_extended_on_resume() -> None:
+    execution = AgentRuntime(
+        chat=scripted_chat([
+            '{"type":"plan","tasks":[{"id":"one","title":"one","depends_on":[]}]}',
+            '{"type":"final","answer":"continued","citations":[]}',
+        ]),
+        registry=registry_for(lambda args: {"ok": True, "data": {}, "sources": []}),
+        max_steps=1,
+    ).start("continue after limit")
+    paused = execution.advance()
+    assert paused.status == "paused"
+    assert execution.step_no == 1
+    assert execution.step_limit == 1
+
+    completed = execution.resume()
+    assert completed.status == "completed"
+    assert completed.answer == "continued"
+    assert execution.step_no == 2
+    assert execution.step_limit == 2
+
+
 def test_streaming_answer() -> None:
     chunks = [
         '{"type":"final","answer":"你',
@@ -341,6 +371,7 @@ CASES = {
     "tool_context": test_tool_runtime_context,
     "cancel_approved": test_cancel_during_approved_tool,
     "timeout": test_timeout,
+    "resume_budget": test_step_limit_can_be_extended_on_resume,
     "stream": test_streaming_answer,
     "args_alias": test_args_alias,
     "stuck_plan": test_stuck_plan_replan,

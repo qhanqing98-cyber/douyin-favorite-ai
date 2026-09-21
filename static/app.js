@@ -12,8 +12,12 @@ const state = {
   agentPoll: null,
   agentStream: null,
   streamFrame: null,
+  agentActionPending: false,
   renderedTurns: new Set(),
   jobPoll: null,
+  jobStarting: false,
+  jobActive: false,
+  libraryToken: 0,
   selectedVideos: new Set(),
   category: "",
   lastQuery: "",
@@ -446,12 +450,14 @@ function renderInspector(run) {
 function renderApproval(run) {
   const container = $("agentApproval");
   if (!run) { container.innerHTML = ""; return; }
+  const busy = state.agentActionPending;
+  const disabled = busy ? " disabled" : "";
   if (run.status === "running") {
-    container.innerHTML = `<div class="approval-card"><div class="approval-actions"><button class="danger-button compact" data-agent-action="cancel">停止研究</button></div></div>`;
+    container.innerHTML = `<div class="approval-card"><div class="approval-actions"><button class="danger-button compact" data-agent-action="cancel"${disabled}>${busy ? "正在处理…" : "停止研究"}</button></div></div>`;
     return;
   }
   if (["paused", "interrupted"].includes(run.status)) {
-    container.innerHTML = `<div class="approval-card"><h3>研究暂时中断</h3><p>${esc(run.error || "可以从最近保存的步骤继续。")}</p><div class="approval-actions"><button class="secondary-button compact" data-agent-action="continue">继续研究</button></div></div>`;
+    container.innerHTML = `<div class="approval-card"><h3>研究暂时中断</h3><p>${esc(run.error || "可以从最近保存的步骤继续。")}</p><div class="approval-actions"><button class="secondary-button compact" data-agent-action="continue"${disabled}>${busy ? "正在继续…" : "继续研究"}</button></div></div>`;
     return;
   }
   if (run.status === "failed" && run.error) {
@@ -463,7 +469,7 @@ function renderApproval(run) {
   if (run.status === "waiting_approval" && run.pending_tool) {
     const pending = run.pending_tool;
     const count = Array.isArray(pending.args?.ids) ? `，涉及 ${pending.args.ids.length} 个视频` : "";
-    container.innerHTML = `<div class="approval-card needs-confirm"><h3>需要确认</h3><p>Agent 准备${esc(toolLabel(pending.tool))}${count}。${esc(pending.reason || "这项操作会修改本地数据。")}</p><div class="approval-actions"><button class="secondary-button compact" data-agent-action="approve">批准操作</button><button class="danger-button compact" data-agent-action="reject">拒绝并结束</button></div></div>`;
+    container.innerHTML = `<div class="approval-card needs-confirm"><h3>需要确认</h3><p>Agent 准备${esc(toolLabel(pending.tool))}${count}。${esc(pending.reason || "这项操作会修改本地数据。")}</p><div class="approval-actions"><button class="secondary-button compact" data-agent-action="approve"${disabled}>${busy ? "正在提交…" : "批准操作"}</button><button class="danger-button compact" data-agent-action="reject"${disabled}>拒绝并结束</button></div></div>`;
     return;
   }
   container.innerHTML = "";
@@ -544,6 +550,8 @@ function newAgentSession(focus = true) {
 
 async function beginRenameSession() {
   if (!state.sessionId || !state.session) { toast("请先创建或选择一个会话。", "error"); return; }
+  const sessionId = state.sessionId;
+  const token = state.sessionToken;
   const title = $("agentSessionTitle");
   const oldTitle = title.textContent.trim();
   title.contentEditable = "true";
@@ -557,10 +565,11 @@ async function beginRenameSession() {
     const nextTitle = title.textContent.trim().slice(0, 80);
     if (!nextTitle || nextTitle === oldTitle) { title.textContent = oldTitle; return; }
     try {
-      await fetchJson(`/api/agent/sessions/${encodeURIComponent(state.sessionId)}`, {
+      await fetchJson(`/api/agent/sessions/${encodeURIComponent(sessionId)}`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: nextTitle }),
       });
+      if (token !== state.sessionToken || sessionId !== state.sessionId) return;
       state.session.title = nextTitle;
       await loadAgentSessions();
       toast("会话名称已更新");
@@ -578,10 +587,12 @@ async function beginRenameSession() {
 
 async function deleteCurrentSession() {
   if (!state.sessionId) { toast("当前没有可删除的会话。", "error"); return; }
+  const sessionId = state.sessionId;
+  const token = state.sessionToken;
   if (!confirm(`删除“${state.session?.title || "这个会话"}”及全部研究记录？此操作不可撤销。`)) return;
   try {
-    await fetchJson(`/api/agent/sessions/${encodeURIComponent(state.sessionId)}`, { method: "DELETE" });
-    newAgentSession(false);
+    await fetchJson(`/api/agent/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+    if (token === state.sessionToken && sessionId === state.sessionId) newAgentSession(false);
     await loadAgentSessions();
     toast("会话已删除");
   } catch (error) { toast(error.message, "error"); }
@@ -709,6 +720,7 @@ async function askAgent(event) {
 }
 
 async function agentAction(action) {
+  if (state.agentActionPending) return;
   const run = latestRun();
   if (!run) return;
   if (["approve", "continue"].includes(action) && !ensureLlmConfigured()) return;
@@ -724,13 +736,27 @@ async function agentAction(action) {
   else if (action === "cancel") url += "/cancel";
   else return;
 
+  const token = state.sessionToken;
+  const sessionId = state.sessionId;
+  const runId = run.run_id;
+  state.agentActionPending = true;
+  renderApproval(run);
   try {
     const updated = await fetchJson(url, options);
+    if (token !== state.sessionToken || sessionId !== state.sessionId || runId !== state.activeRunId) return;
+    state.agentActionPending = false;
     mergeRun(updated);
     renderAgentWorkspace();
     await loadAgentSessions();
     if (updated.status === "running") watchAgent(updated.run_id, state.sessionId);
-  } catch (error) { toast(error.message, "error"); }
+  } catch (error) {
+    if (token === state.sessionToken && sessionId === state.sessionId) toast(error.message, "error");
+  } finally {
+    if (state.agentActionPending) {
+      state.agentActionPending = false;
+      renderApproval(latestRun());
+    }
+  }
 }
 
 function resizeComposer() {
@@ -785,14 +811,20 @@ async function loadCategories() {
 }
 
 async function loadLibrary() {
+  const token = ++state.libraryToken;
+  const category = state.category;
   state.libraryMode = "library";
   state.lastQuery = "";
+  state.selectedVideos.clear();
+  updateSelectedButton();
   $("results").innerHTML = librarySkeleton();
   try {
-    const data = await fetchJson(`/api/videos?limit=30&category=${encodeURIComponent(state.category)}`);
+    const data = await fetchJson(`/api/videos?limit=30&category=${encodeURIComponent(category)}`);
+    if (token !== state.libraryToken || state.libraryMode !== "library" || category !== state.category) return;
     $("results").innerHTML = data.hits.length ? data.hits.map(videoCard).join("") : '<div class="empty-state">这个分类还没有收藏内容。</div>';
-    $("searchNote").textContent = state.category ? `分类「${state.category === "__none__" ? "未分类" : state.category}」的最近内容` : "最近采集的 30 条收藏";
+    $("searchNote").textContent = category ? `分类「${category === "__none__" ? "未分类" : category}」的最近内容` : "最近采集的 30 条收藏";
   } catch (error) {
+    if (token !== state.libraryToken) return;
     $("results").innerHTML = `<div class="empty-state">${esc(error.message)}</div>`;
   }
 }
@@ -801,23 +833,32 @@ async function searchLibrary(event) {
   event?.preventDefault();
   const query = $("q").value.trim();
   if (!query) return;
+  const token = ++state.libraryToken;
   state.libraryMode = "search";
   state.lastQuery = query;
+  state.selectedVideos.clear();
+  updateSelectedButton();
   $("results").innerHTML = librarySkeleton();
   try {
     const data = await fetchJson(`/api/videos?q=${encodeURIComponent(query)}`);
+    if (token !== state.libraryToken || state.libraryMode !== "search" || query !== state.lastQuery) return;
     $("results").innerHTML = data.hits.length ? data.hits.map(videoCard).join("") : '<div class="empty-state">没有找到相关收藏，试试更短的关键词。</div>';
     $("searchNote").textContent = `找到 ${data.hits.length} 条相关收藏`;
-  } catch (error) { $("results").innerHTML = `<div class="empty-state">${esc(error.message)}</div>`; }
+  } catch (error) {
+    if (token !== state.libraryToken) return;
+    $("results").innerHTML = `<div class="empty-state">${esc(error.message)}</div>`;
+  }
 }
 
 function updateSelectedButton() {
   $("btnSel").textContent = `转写勾选 · ${state.selectedVideos.size}`;
-  $("btnSel").disabled = state.selectedVideos.size === 0;
+  $("btnSel").disabled = state.selectedVideos.size === 0 || state.jobStarting || state.jobActive;
 }
 
 async function transcribeSelected() {
-  if (!state.selectedVideos.size) return;
+  if (!state.selectedVideos.size || state.jobStarting) return;
+  state.jobStarting = true;
+  $("btnSel").disabled = true;
   try {
     await fetchJson("/api/transcribe", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -829,6 +870,10 @@ async function transcribeSelected() {
     showView("maintenance");
     watchJob();
   } catch (error) { toast(error.message, "error"); }
+  finally {
+    state.jobStarting = false;
+    updateSelectedButton();
+  }
 }
 
 async function copyText(text) {
@@ -841,7 +886,10 @@ const jobButtonIds = ["btnTr", "btnTrAll", "btnSum", "btnSumAll", "btnCls", "btn
 function setJobButtons(disabled) { jobButtonIds.forEach(id => { $(id).disabled = disabled; }); }
 
 async function runJob(url, n = 0, all = false) {
+  if (state.jobStarting) return;
   if (["/api/summarize", "/api/classify"].includes(url) && !ensureLlmConfigured()) return;
+  state.jobStarting = true;
+  setJobButtons(true);
   try {
     await fetchJson(url, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -849,12 +897,19 @@ async function runJob(url, n = 0, all = false) {
     });
     toast("后台任务已开始");
     watchJob();
-  } catch (error) { toast(error.message, "error"); }
+  } catch (error) {
+    setJobButtons(false);
+    toast(error.message, "error");
+  } finally {
+    state.jobStarting = false;
+  }
 }
 
 function watchJob() {
   clearInterval(state.jobPoll);
+  state.jobActive = true;
   setJobButtons(true);
+  updateSelectedButton();
   $("barwrap").hidden = false;
   state.jobPoll = setInterval(pollJob, 1800);
   pollJob();
@@ -883,7 +938,9 @@ async function pollJob() {
   } else {
     clearInterval(state.jobPoll);
     state.jobPoll = null;
+    state.jobActive = false;
     setJobButtons(false);
+    updateSelectedButton();
     $("jobState").textContent = "空闲";
     $("btnCancel").hidden = true;
     $("barwrap").hidden = true;

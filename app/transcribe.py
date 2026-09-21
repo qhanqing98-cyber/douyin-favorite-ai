@@ -8,6 +8,7 @@
 import os
 import random
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -37,8 +38,9 @@ PROJECT = Path(__file__).resolve().parent.parent
 AUDIO_DIR = PROJECT / "audio_cache"
 COOKIES = PROJECT / "data" / "cookies.txt"
 
-_model = None  # 模型很重，进程内只加载一次
+_models: dict[str, object] = {}  # 按模型规格缓存，避免切换规格后误用旧模型
 _opencc = None
+_transcription_lock = threading.Lock()
 
 LOGIN_COOKIE_NAMES = {
     "sessionid", "sessionid_ss", "sid_guard", "uid_tt", "uid_tt_ss",
@@ -129,8 +131,7 @@ def _to_simplified(text: str) -> str:
 
 
 def _get_model(model_size: str):
-    global _model
-    if _model is None:
+    if model_size not in _models:
         from faster_whisper import WhisperModel
 
         # 优先用项目内 models/ 下手动下载的模型（HF 的 Xet 协议在国内
@@ -138,8 +139,8 @@ def _get_model(model_size: str):
         local = PROJECT / "models" / f"faster-whisper-{model_size}"
         target = str(local) if local.is_dir() else model_size
         print(f"加载 Whisper 模型 {target}（首次会下载权重）...", flush=True)
-        _model = WhisperModel(target, device="auto", compute_type="int8")
-    return _model
+        _models[model_size] = WhisperModel(target, device="auto", compute_type="int8")
+    return _models[model_size]
 
 
 def _looks_like_login_error(message: str) -> bool:
@@ -169,7 +170,7 @@ def _has_audio_stream(path: Path) -> bool:
         return False
 
 
-def _download_audio_via_browser(aweme_id: str) -> tuple[Path | None, str]:
+def _download_audio_via_browser(aweme_id: str, should_stop=None) -> tuple[Path | None, str]:
     """用已登录的 Playwright 会话获取当前媒体地址，绕过 yt-dlp 的网页验证挑战。"""
     import av
     import io
@@ -200,11 +201,15 @@ def _download_audio_via_browser(aweme_id: str) -> tuple[Path | None, str]:
         )
         deadline = time.monotonic() + 12
         while time.monotonic() < deadline and not media_urls:
+            if should_stop and should_stop():
+                return None, "用户已取消音频下载"
             page.wait_for_timeout(1000)
 
         # 页面通常同时请求视频和音频，音频 URL 优先；视频 URL 只作为兼容回退。
         candidates = list(dict.fromkeys(reversed(audio_urls + media_urls)))
         for media_url in candidates:
+            if should_stop and should_stop():
+                return None, "用户已取消音频下载"
             try:
                 response = ctx.request.get(
                     media_url,
@@ -214,7 +219,7 @@ def _download_audio_via_browser(aweme_id: str) -> tuple[Path | None, str]:
                     },
                     timeout=30_000,
                 )
-                body = response.body() if response.status == 200 else b""
+                body = response.body() if response.status in {200, 206} else b""
                 if len(body) < 1024:
                     continue
                 container = av.open(io.BytesIO(body))
@@ -248,7 +253,7 @@ def _download_audio_via_browser(aweme_id: str) -> tuple[Path | None, str]:
                 pass
 
 
-def _download_audio(aweme_id: str, retries: int = 3) -> tuple[Path | None, str]:
+def _download_audio(aweme_id: str, retries: int = 3, should_stop=None) -> tuple[Path | None, str]:
     """yt-dlp 下载该视频的音频轨。成功返回文件路径，失败返回 None。
 
     用 sys.executable -m yt_dlp 保证调用的是当前 venv 里的 yt-dlp。
@@ -266,6 +271,8 @@ def _download_audio(aweme_id: str, retries: int = 3) -> tuple[Path | None, str]:
             return path, ""
     last_err = "未找到可下载的音频"
     for attempt in range(retries):
+        if should_stop and should_stop():
+            return None, "用户已取消音频下载"
         cmd = [
             sys.executable, "-m", "yt_dlp",
             "--cookies", str(COOKIES),
@@ -274,7 +281,16 @@ def _download_audio(aweme_id: str, retries: int = 3) -> tuple[Path | None, str]:
             "-o", str(AUDIO_DIR / f"{aweme_id}.%(ext)s"),
             f"https://www.douyin.com/video/{aweme_id}",
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=120,
+            )
+        except subprocess.TimeoutExpired:
+            last_err = "音频下载超过 120 秒，已终止本次尝试"
+            if attempt < retries - 1 and not (should_stop and should_stop()):
+                time.sleep(1)
+            continue
         if result.returncode == 0:
             files = list(AUDIO_DIR.glob(f"{aweme_id}.*"))
             for path in files:
@@ -285,11 +301,13 @@ def _download_audio(aweme_id: str, retries: int = 3) -> tuple[Path | None, str]:
         last_err = (result.stderr or result.stdout or "下载失败").strip()[-240:]
         if _looks_like_login_error(last_err):
             break
-        if attempt < retries - 1:
+        if attempt < retries - 1 and not (should_stop and should_stop()):
             time.sleep(random.uniform(3, 8))
     if _is_cookie_challenge(last_err):
         print("\n  yt-dlp 触发抖音网页验证，改用已登录浏览器下载...", flush=True)
-        browser_path, browser_error = _download_audio_via_browser(aweme_id)
+        browser_path, browser_error = _download_audio_via_browser(
+            aweme_id, should_stop=should_stop,
+        )
         if browser_path is not None:
             return browser_path, ""
         last_err = browser_error or last_err
@@ -306,6 +324,19 @@ def _transcribe_file(path: Path, model_size: str) -> str:
 
 
 def run(limit: int = 10, model_size: str = "small", progress=None, ids=None, should_stop=None) -> TranscriptionReport:
+    """串行化转写入口，防止多个 Agent/后台任务同时争用 Whisper 和浏览器 profile。"""
+    if not _transcription_lock.acquire(blocking=False):
+        raise TranscriptionError("已有转写任务正在运行，请等待它完成或取消后再试")
+    try:
+        return _run(
+            limit=limit, model_size=model_size, progress=progress,
+            ids=ids, should_stop=should_stop,
+        )
+    finally:
+        _transcription_lock.release()
+
+
+def _run(limit: int = 10, model_size: str = "small", progress=None, ids=None, should_stop=None) -> TranscriptionReport:
     """批量转写；下载失败不会写入占位 transcript，保留为待重试状态。
 
     progress: 可选回调 progress(done, total, title)，Web 端用来更新进度和预计剩余时间。
@@ -334,7 +365,7 @@ def run(limit: int = 10, model_size: str = "small", progress=None, ids=None, sho
             progress(i, total, f"正在处理：{row['title']}")
         aid = row["aweme_id"]
         print(f"[{i + 1}/{len(rows)}] {row['title'][:30]}", end="", flush=True)
-        audio, download_error = _download_audio(aid)
+        audio, download_error = _download_audio(aid, should_stop=should_stop)
         if audio is None:
             if _looks_like_login_error(download_error):
                 raise LoginRequiredError(

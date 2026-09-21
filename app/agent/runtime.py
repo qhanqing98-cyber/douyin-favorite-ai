@@ -227,6 +227,7 @@ class AgentExecution:
         self.plan: list[dict] = []
         self.active_task_id: str | None = None
         self.step_no = 0
+        self.step_limit = runtime.max_steps
         self.status: Literal["running", "waiting_approval", "paused", "completed", "failed", "cancelled"] = "running"
         self.answer = ""
         self.error: str | None = None
@@ -252,6 +253,14 @@ class AgentExecution:
             error=self.error,
         )
 
+    def fail(self, error: str) -> AgentResult:
+        """把未捕获异常转成保留计划、步骤和来源的完整失败结果。"""
+        if self.status == "cancelled":
+            return self._result()
+        self.status = "failed"
+        self.error = error[:300]
+        return self._result()
+
     def _observe(self, tool: str, result: dict) -> None:
         self.runtime._add_sources(self.sources, result)
         observation = json.dumps(result, ensure_ascii=False)
@@ -272,6 +281,7 @@ class AgentExecution:
             "plan": self.plan,
             "active_task_id": self.active_task_id,
             "step_no": self.step_no,
+            "step_limit": self.step_limit,
             "status": self.status,
             "answer": self.answer,
             "error": self.error,
@@ -289,6 +299,7 @@ class AgentExecution:
         execution.plan = list(state.get("plan", []))
         execution.active_task_id = state.get("active_task_id")
         execution.step_no = int(state.get("step_no", len(execution.steps)))
+        execution.step_limit = int(state.get("step_limit", runtime.max_steps))
         execution.status = state.get("status", "running")
         execution.answer = state.get("answer", "")
         execution.error = state.get("error")
@@ -300,9 +311,16 @@ class AgentExecution:
         """清除中断标记并从快照中的下一步继续执行。"""
         if self.status in {"completed", "failed", "cancelled"}:
             return self._result()
+        self.prepare_resume(extend_budget=self.status == "paused")
+        return self.advance()
+
+    def prepare_resume(self, *, extend_budget: bool = False) -> None:
+        """恢复执行；达到步数上限后显式续期一段预算，但保持步骤编号单调递增。"""
+        if extend_budget or self.step_no >= self.step_limit:
+            self.step_limit = self.step_no + self.runtime.max_steps
+        self._cancel_event.clear()
         self.status = "running"
         self.error = None
-        return self.advance()
 
     def _ready_task(self, task_id: str | None = None) -> dict | None:
         """选择指定任务或第一个依赖已完成的待执行任务。"""
@@ -377,7 +395,7 @@ class AgentExecution:
             return self._result()
 
         deadline = time.monotonic() + self.runtime.timeout_seconds
-        while self.step_no < self.runtime.max_steps:
+        while self.step_no < self.step_limit:
             if self._cancel_event.is_set():
                 return self._result()
             if time.monotonic() >= deadline:
@@ -550,7 +568,7 @@ class AgentExecution:
             self._checkpoint()
 
         self.status = "paused"
-        self.error = f"达到最大步骤数 {self.runtime.max_steps}"
+        self.error = f"达到本轮最大步骤数 {self.runtime.max_steps}，可继续执行"
         self._checkpoint()
         return self._result()
 
@@ -598,6 +616,7 @@ class AgentExecution:
             return AgentResult(status="failed", error="当前没有待批准操作")
         if not approved:
             self.steps[-1]["status"] = "rejected"
+            self._set_task_status("cancelled")
             self.pending_tool = None
             self.status = "cancelled"
             self.error = "用户拒绝了写操作"
@@ -609,6 +628,9 @@ class AgentExecution:
     def cancel(self) -> AgentResult:
         """取消当前执行，不执行待批准工具。"""
         self._cancel_event.set()
+        if self.status == "waiting_approval" and self.steps:
+            self.steps[-1]["status"] = "cancelled"
+            self._set_task_status("cancelled")
         self.pending_tool = None
         self.status = "cancelled"
         self.error = "用户取消了 Agent 任务"
