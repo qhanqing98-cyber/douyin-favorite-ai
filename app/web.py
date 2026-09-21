@@ -197,6 +197,7 @@ def _checkpoint_agent(run_id: str, execution: AgentExecution) -> None:
         run_id,
         status=execution.status,
         state=execution.to_state(),
+        clear_result=execution.status == "running",
         error=execution.error or "",
     )
     for step in execution.steps:
@@ -257,11 +258,15 @@ def _load_agent_record(run_id: str) -> dict | None:
         execution.status = "running"
         execution.error = None
     result = AgentResult.from_dict(json.loads(row["result_json"])) if row["result_json"] else None
+    if row["status"] == "interrupted":
+        # running 任务重启时，result_json 可能仍是上一个 waiting_approval 快照；
+        # 中断恢复必须以 state_json 为准，不能把过期结果重新展示成待批准。
+        result = None
     return {
         "execution": execution,
         "result": result,
         "router": None,
-        "needs_credentials": True,
+        "needs_credentials": row["status"] == "interrupted",
         "status": row["status"],
         "session_id": row["session_id"],
         "error": row["error"],
@@ -327,7 +332,31 @@ def _run_agent(run_id: str, record: dict) -> None:
     try:
         result = record["execution"].advance()
     except Exception as exc:
-        result = AgentResult(status="failed", error=str(exc)[:300])
+        error = str(exc)[:300]
+        record["execution"].status = "failed"
+        record["execution"].error = error
+        result = AgentResult(status="failed", error=error)
+    with record["lock"]:
+        record["result"] = result
+        record["status"] = result.status
+    _persist_agent_record(run_id, record, result)
+    _emit_agent_event(record, {"type": "done", "run": _agent_payload(run_id, record)})
+    if result.status in {"completed", "failed", "cancelled"}:
+        with record["lock"]:
+            record["router"] = None
+            record["pool"] = None
+            record["execution"].runtime = AgentRuntime()
+
+
+def _run_approved_agent(run_id: str, record: dict, pending: dict) -> None:
+    """后台执行已批准的耗时工具，避免审批 HTTP 请求和状态查询被长时间阻塞。"""
+    try:
+        result = record["execution"].execute_approved_tool(pending, continue_run=True)
+    except Exception as exc:
+        error = str(exc)[:300]
+        record["execution"].status = "failed"
+        record["execution"].error = error
+        result = AgentResult(status="failed", error=error)
     with record["lock"]:
         record["result"] = result
         record["status"] = result.status
@@ -513,6 +542,8 @@ def agent_approval(run_id: str, req: AgentApprovalReq,
             raise HTTPException(404, "Agent 任务不存在或已过期")
         with _agent_lock:
             _agent_runs[run_id] = record
+    pending = None
+    result = None
     with record["lock"]:
         # execution.status 是实时状态源；record["status"] 只在线程收尾时同步，
         # 直接用它会在“轮询到等待批准后立刻批准”时产生竞态误判。
@@ -534,15 +565,23 @@ def agent_approval(run_id: str, req: AgentApprovalReq,
             record["execution"].runtime.tool_progress = lambda done, total, title: _agent_tool_progress(
                 run_id, record, done, total, title,
             )
-        result = record["execution"].approve(req.approved, continue_run=False)
-        record["result"] = result
-        record["status"] = result.status
-    _persist_agent_record(run_id, record, result)
-    if result.status == "running":
-        with record["lock"]:
+            pending = record["execution"].begin_approval()
             record["result"] = None
-        threading.Thread(target=_run_agent, args=(run_id, record), daemon=True).start()
-    elif result.status in {"completed", "failed", "cancelled"}:
+            record["status"] = "running"
+            record["tool_progress"] = None
+            record["tool_started_at"] = None
+        else:
+            result = record["execution"].approve(False, continue_run=False)
+            record["result"] = result
+            record["status"] = result.status
+    if pending is not None:
+        threading.Thread(
+            target=_run_approved_agent, args=(run_id, record, pending), daemon=True,
+        ).start()
+        return _agent_payload(run_id, record)
+
+    _persist_agent_record(run_id, record, result)
+    if result.status in {"completed", "failed", "cancelled"}:
         with record["lock"]:
             record["router"] = None
             record["pool"] = None
@@ -753,9 +792,9 @@ def ask(req: AskReq,
 
 
 class JobReq(BaseModel):
-    n: int = 10
+    n: int = Field(default=10, ge=0, le=1000)
     all: bool = False  # True = 跑完全部剩余
-    ids: list[str] = []  # 非空 = 只转写这些视频（搜索结果勾选）
+    ids: list[str] = Field(default_factory=list, max_length=200)  # 非空 = 只转写这些视频（搜索结果勾选）
     llm_pool: list[dict] = Field(default_factory=list, max_length=10)
 
 

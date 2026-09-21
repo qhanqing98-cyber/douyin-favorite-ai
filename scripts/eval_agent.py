@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -194,6 +195,88 @@ def test_approval_gate() -> None:
     assert len(writes) == 1
 
 
+def test_deferred_approval_handoff() -> None:
+    """Web 可以先返回 running，再在后台执行耗时写工具。"""
+    writes = []
+
+    def write(args):
+        writes.append(1)
+        return {"ok": True, "data": {}, "sources": []}
+
+    execution = AgentRuntime(
+        chat=scripted_chat([
+            '{"type":"tool_call","tool":"lookup","args":{}}',
+            '{"type":"final","answer":"done","citations":[]}',
+        ]),
+        registry=registry_for(write, side_effect="write"),
+    ).start("write later")
+    waiting = execution.advance()
+    assert waiting.status == "waiting_approval"
+
+    pending = execution.begin_approval()
+    assert execution.status == "running"
+    assert execution.pending_tool is None
+    assert execution.steps[-1]["status"] == "running"
+    assert writes == []
+
+    completed = execution.execute_approved_tool(pending)
+    assert completed.status == "completed"
+    assert writes == [1]
+
+
+def test_tool_runtime_context() -> None:
+    """工具按声明接收本次 Agent 的模型函数和取消信号。"""
+    seen = {}
+
+    def contextual(args, *, llm_chat=None, should_stop=None):
+        seen["reply"] = llm_chat([{"role": "user", "content": "ping"}])
+        seen["cancelled"] = should_stop()
+        return {"ok": True, "data": {}, "sources": []}
+
+    registry = registry_for(contextual)
+    result = registry.call(
+        "lookup", {},
+        llm_chat=lambda messages, max_tokens=2000: "web-provider",
+        should_stop=lambda: False,
+    )
+    assert result["ok"]
+    assert seen == {"reply": "web-provider", "cancelled": False}
+
+
+def test_cancel_during_approved_tool() -> None:
+    """取消信号应传进耗时工具，且工具返回后不能复活 Agent。"""
+    started = threading.Event()
+    holder = {}
+
+    def write(args, *, should_stop=None):
+        started.set()
+        while not should_stop():
+            time.sleep(0.005)
+        return {"ok": False, "data": None, "error": {"code": "cancelled"}, "sources": []}
+
+    execution = AgentRuntime(
+        chat=scripted_chat([
+            '{"type":"tool_call","tool":"lookup","args":{}}',
+            '{"type":"final","answer":"must-not-run","citations":[]}',
+        ]),
+        registry=registry_for(write, side_effect="write"),
+    ).start("cancel write")
+    assert execution.advance().status == "waiting_approval"
+    pending = execution.begin_approval()
+
+    def run_tool():
+        holder["result"] = execution.execute_approved_tool(pending)
+
+    worker = threading.Thread(target=run_tool)
+    worker.start()
+    assert started.wait(timeout=1)
+    execution.cancel()
+    worker.join(timeout=1)
+    assert not worker.is_alive()
+    assert holder["result"].status == "cancelled"
+    assert execution.steps[-1]["status"] == "cancelled"
+
+
 def test_timeout() -> None:
     registry = registry_for(lambda args: {"ok": True, "data": {}, "sources": []})
 
@@ -254,6 +337,9 @@ CASES = {
     "retry": test_retry,
     "replan": test_replan,
     "approval": test_approval_gate,
+    "deferred_approval": test_deferred_approval_handoff,
+    "tool_context": test_tool_runtime_context,
+    "cancel_approved": test_cancel_during_approved_tool,
     "timeout": test_timeout,
     "stream": test_streaming_answer,
     "args_alias": test_args_alias,

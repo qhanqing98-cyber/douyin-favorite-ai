@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import inspect
 from typing import Any, Callable, Literal, TypeVar
 
 from pydantic import BaseModel, Field
@@ -138,7 +139,7 @@ def _get_video(args: VideoArgs) -> dict:
     return _result(item, sources=[item])
 
 
-def _transcribe(args: VideoIdsArgs, progress=None) -> dict:
+def _transcribe(args: VideoIdsArgs, *, progress=None, should_stop=None) -> dict:
     from app import transcribe
 
     available = db.get_untranscribed(10**9, ids=args.ids)
@@ -146,7 +147,9 @@ def _transcribe(args: VideoIdsArgs, progress=None) -> dict:
     if not ids:
         return _result({"processed": 0, "message": "没有待转写的视频"})
     try:
-        report = transcribe.run(limit=len(ids), ids=ids, progress=progress)
+        report = transcribe.run(
+            limit=len(ids), ids=ids, progress=progress, should_stop=should_stop,
+        )
     except transcribe.LoginRequiredError as exc:
         return _error(transcribe.LoginRequiredError.code, str(exc))
     return _result(
@@ -157,13 +160,15 @@ def _transcribe(args: VideoIdsArgs, progress=None) -> dict:
     )
 
 
-def _summarize(args: VideoIdsArgs) -> dict:
-    from app import llm
-
+def _summarize(args: VideoIdsArgs, *, llm_chat=None, should_stop=None) -> dict:
+    if llm_chat is None:
+        return _error("missing_llm_context", "当前任务没有可用的模型配置")
     processed = 0
     skipped: list[dict] = []
     affected: list[str] = []
     for aweme_id in args.ids:
+        if should_stop and should_stop():
+            return _error("cancelled", "用户已取消概要任务")
         row = db.get_video(aweme_id)
         if not row:
             skipped.append({"aweme_id": aweme_id, "reason": "not_found"})
@@ -175,7 +180,15 @@ def _summarize(args: VideoIdsArgs) -> dict:
         if row["summary"]:
             skipped.append({"aweme_id": aweme_id, "reason": "already_summarized"})
             continue
-        summary = llm.summarize(row["title"], row["author"], transcript)
+        prompt = (
+            "请为下面这个抖音视频的语音转写内容生成概要，要求：\n"
+            "1. 用 3-5 句话概括核心内容\n"
+            "2. 如果是知识类视频，列出讲到的关键要点（用短横线列表）\n"
+            "3. 不要编造转写里没有的信息\n\n"
+            f"标题：{row['title']}\n作者：{row['author']}\n"
+            f"转写内容：\n{transcript[:8000]}"
+        )
+        summary = llm_chat([{"role": "user", "content": prompt}], max_tokens=1500)
         db.set_summary(aweme_id, summary)
         processed += 1
         affected.append(aweme_id)
@@ -228,7 +241,8 @@ class ToolRegistry:
     def schemas(self) -> list[dict]:
         return [spec.schema() for spec in self._specs.values()]
 
-    def call(self, name: str, raw_args: dict, *, allow_write: bool = False, progress=None) -> dict:
+    def call(self, name: str, raw_args: dict, *, allow_write: bool = False,
+             progress=None, llm_chat=None, should_stop=None) -> dict:
         """校验并调用工具；写工具必须显式传入 allow_write=True。"""
         spec = self.get(name)
         if spec is None:
@@ -252,10 +266,19 @@ class ToolRegistry:
         except Exception as exc:
             return _error("invalid_arguments", str(exc)[:300])
         try:
-            if name == "transcribe_videos" and progress is not None:
-                result = spec.handler(args, progress)
-            else:
-                result = spec.handler(args)
+            # 工具只接收自己声明的运行时依赖。这样需要 LLM 的写工具会复用
+            # 当前 Agent 的 Web Provider，而不会回退到服务器 .env 中的旧 Key。
+            parameters = inspect.signature(spec.handler).parameters
+            context = {
+                "progress": progress,
+                "llm_chat": llm_chat,
+                "should_stop": should_stop,
+            }
+            kwargs = {
+                key: value for key, value in context.items()
+                if key in parameters and value is not None
+            }
+            result = spec.handler(args, **kwargs)
             result["tool"] = name
             result["side_effect"] = spec.side_effect
             return result
