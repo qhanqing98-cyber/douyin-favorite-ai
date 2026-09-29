@@ -1,142 +1,150 @@
-# 抖音收藏知识库
+# 浮光 · 抖音收藏研究台
 
-把个人抖音收藏夹变成一个**可搜索、可问答的本地知识库**：爬取收藏元数据入库 → 按需语音转写 → AI 生成概要 → 全文检索 + 对 AI 提问。全程本地运行，数据不出本机（仅转写/概要/问答调用 LLM API）。
+把自己的抖音收藏整理成可搜索、可转写、可提问的本地知识库。Playwright 采集收藏元数据，SQLite 保存内容；音频转写与句向量计算在本机完成。生成概要、自动分类和 AI 问答会把相关文本发送给你配置的模型服务。
 
-## 功能一览
+> 项目依赖抖音页面结构和接口响应。页面变化后，采集或下载可能需要调整。请仅处理你有权访问的内容，并遵守平台规则。
 
-- **采集**：扫码登录抖音（登录态落盘），自动滚动收藏夹采集「标题 / 标签 / 作者 / 链接 / 视频直链」入库，支持增量同步
-- **搜索**：SQLite FTS5 trigram 全文索引（标题、标签、作者、转写文本），jieba 分词 + bm25 排序，忘记关键词也能用整句召回；≤2 字短词自动降级 LIKE
-- **转写**：yt-dlp 即时下载音频（直链有时效，不提前囤）→ faster-whisper（CPU int8，本地推理）→ OpenCC 繁转简后入库
-- **AI 概要 / 问答**：基于已转写内容生成概要；提问时用本地 bge 句向量做**语义 + 关键词混合检索**（RRF 融合，向量在本地 ONNX 推理、不联网、零 API 成本），把命中的**相关片段/概要**而不是固定开头喂给 LLM，回答末尾标注来源视频
-- **自动分类**：LLM 先抽样浏览收藏内容、自动设计一套贴合的类别（6~12 个 + 兜底「其他」，存库复用），再批量归类；换台机器、换个收藏夹，类别会跟着内容变，不写死
-- **Agent 研究**：不只是单次问答——LLM 作为控制器自主**拆分研究计划**（plan），按依赖顺序逐步调用工具（关键词搜索 / 语义检索 / 读取视频 / 比较观点），资料不足会自己调整计划，直到产出带引用来源的最终回答；**会修改数据的操作（转写、生成概要）会暂停等你批准**，随时可停止或从断点继续
-- **研究会话**：研究历史按会话保存（SQLite 持久化，服务重启不丢），支持多轮追问继承上下文、重命名、搜索会话；页面刷新自动恢复进行中的任务
-- **Web 界面**：三视图单页应用——Agent 研究（对话 + 实时执行轨迹/计划/引用）、收藏库（搜索高亮、分类筛选、勾选按需转写）、数据维护（同步/转写/概要/分类/重建索引，进度条 + 取消 + 历史记录）
+## Web 界面
 
-## 项目结构
+下图来自独立的空白示例数据库，不包含真实收藏、登录态或 API Key。
 
-```
-├── main.py              # CLI 入口（login/crawl/search/transcribe/summarize/ask/index/web/stats）
-├── app/
-│   ├── crawler.py       # Playwright 登录 + 旁听接口采集（不逆向签名）
-│   ├── db.py            # SQLite + FTS5 层：建表/迁移/搜索/Agent 会话与运行持久化
-│   ├── transcribe.py    # yt-dlp 下载音频 + faster-whisper 转写 + 繁转简
-│   ├── llm.py           # OpenAI 兼容客户端（DeepSeek 等），概要与问答
-│   ├── embedder.py      # 本地句向量 bge-small-zh-v1.5 ONNX（onnxruntime + tokenizers）
-│   ├── indexer.py       # 转写/概要/标题 → 分块 → 向量索引（内容签名增量更新）
-│   ├── retriever.py     # 语义 + 关键词混合召回（RRF 融合）→ 问答上下文
-│   ├── web.py           # FastAPI 后端：搜索/问答/Agent 任务/后台任务（进度/取消/历史）
-│   └── agent/           # Agent 决策循环
-│       ├── tools.py     # 工具层：Pydantic 参数校验 + 统一 ToolResult（写操作需审批）
-│       └── runtime.py   # 决策循环：plan/tool_call/final 三态 JSON 协议，可暂停/继续/取消
-├── static/              # 前端三件套（原生 JS，无框架）
-│   ├── index.html       # 页面结构（三视图：Agent 研究 / 收藏库 / 数据维护）
-│   ├── app.css          # 样式
-│   └── app.js           # 逻辑（会话管理、轮询、渲染）
-├── scripts/
-│   ├── download_model.py   # 预下载 Whisper / BGE 模型（hf-mirror 镜像）
-│   └── eval_agent.py       # Agent 离线评测脚本（注入假模型，不调 API）
-├── data/                # favorites.db（SQLite 数据库）
-├── browser_data/        # Playwright 登录态
-├── models/              # 本地模型：faster-whisper-small + bge-small-zh-v1.5
-├── audio_cache/         # 转写用音频临时目录
-└── .env                 # LLM 密钥配置（不入库）
-```
+| Agent 研究 | 数据维护 |
+| --- | --- |
+| ![Agent 研究首页](docs/images/web-agent.png) | ![数据维护页面](docs/images/web-maintenance.png) |
 
-## 快速开始
+页面还有「收藏库」和「模型设置」。登录并同步后，收藏库可以按关键词与类别查找视频；模型设置用于添加和测试兼容 OpenAI Chat Completions 的服务。
 
-### 方式一：一键启动（Windows 推荐）
+## 从零开始
 
-1. 安装 [Python 3.10+](https://www.python.org/downloads/)（安装时勾选 **Add python.exe to PATH**）
-2. 把整个项目文件夹放到任意位置，**双击 `start.bat`**，脚本会按步骤执行并显示进度：
-   - `[1/5]` 创建虚拟环境
-   - `[2/5]` 安装依赖（清华 pip 源 + npmmirror Chromium 镜像）
-   - `[3/5]` 下载 Whisper 语音模型（**约 461MB，仅首次**，来自 hf-mirror.com 镜像，存到 `models/`，来源/去向/用途都会打印在屏幕上）
-   - `[4/5]` 下载 BGE 句向量模型（**约 120MB，仅首次**，问 AI 的语义检索用；缺了不致命，问答会自动退化为纯关键词检索）
-   - `[5/5]` 启动服务并自动打开浏览器
-3. 启动后打开「模型设置」，添加至少一个 OpenAI-compatible Provider；多个配置可以组成模型池，按优先级和故障情况自动切换
-4. 页面里点「扫码登录」→「同步收藏夹」→「一键分类全部」，之后就能搜索和转写了
+需要 Python 3.10+。Windows 可双击 `start.bat`：它创建 `.venv`、安装依赖和 Chromium、下载本地 Whisper 与 BGE 模型，然后在 `http://127.0.0.1:8642` 启动页面。模型首次下载较大，需要联网。脚本还会在缺少 `.env` 时从 `.env.example` 创建一份，供 CLI 的概要和问答使用。
 
-### 方式二：手动安装（跨平台 / 想了解细节）
+想逐步安装时，在项目根目录运行：
 
-```bash
-# 建议在项目目录内建虚拟环境
+```powershell
 python -m venv .venv
-.venv\Scripts\activate            # Windows
-pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
-
-# 安装 Chromium（国内镜像，官方 CDN 可能极慢）
-$env:PLAYWRIGHT_DOWNLOAD_HOST="https://registry.npmmirror.com/-/binary/playwright"
-playwright install chromium
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m playwright install chromium
+python scripts/download_model.py small
+python scripts/download_model.py bge
+python main.py web
 ```
 
-### 配置 LLM（概要 / 问答 / Agent 需要）
+macOS/Linux 把激活命令换成 `source .venv/bin/activate`。如只需要采集与关键词搜索，可暂缓下载模型；转写需要 Whisper，本地语义检索需要 BGE。BGE 缺失时，问答检索会退回关键词路径。
 
-推荐直接在 Web 的「模型设置」中配置。配置会保存在当前浏览器的 `localStorage`，服务端只在一次 Agent 任务期间临时持有，不写入数据库：
+打开页面后，按这个顺序操作：
 
-```text
-模型池
-├─ 主模型 Key 1   deepseek-chat
-├─ 主模型 Key 2   deepseek-chat
-└─ 备用模型       其他兼容模型
+1. 在「数据维护」点「扫码登录」，完成抖音登录，再点「同步收藏夹」。
+2. 去「收藏库」搜索标题、标签、作者；需要检索视频里讲过的话时，先转写一批。
+3. 在「模型设置」添加 API 地址、模型名和 API Key，测试连接后再使用概要、分类和 Agent 研究。
+4. 在「Agent 研究」提问，查看计划、执行轨迹和引用来源。若 Agent 请求转写或概要，页面会等待你批准。
+
+Web 的模型池保存在**当前浏览器的 localStorage**，发起任务时传给本地服务，再由服务调用所选模型提供方。CLI 的 `summarize` 和 `ask` 使用根目录 `.env` 中的 `LLM_API_KEY`、`LLM_BASE_URL`、`LLM_MODEL`；可从 `.env.example` 复制。不要把真实密钥提交到 Git。
+
+## 一张图看数据怎么流动
+
+```mermaid
+flowchart LR
+    A[抖音收藏页] -->|Playwright 监听页面响应| B[crawler.parse_aweme]
+    B -->|视频元数据| C[(data/favorites.db)]
+    C -->|待转写视频| D[transcribe.run]
+    D -->|临时下载音频| E[本地 Whisper]
+    E -->|转写文本| C
+    C -->|标题 / 概要 / 转写| F[indexer.build]
+    F -->|本地 BGE 向量| G[(chunks 表)]
+    C --> H[关键词检索]
+    G --> I[语义检索]
+    H --> J[retriever.hybrid_search]
+    I --> J
+    J -->|相关片段与来源| K[模型服务]
+    K -->|答案| L[Web / CLI]
 ```
 
-每个配置包含：名称、API 地址、模型名称、API Key、启用状态、优先级和权重。远程地址必须使用 HTTPS；共享电脑使用完毕后可点击「清除此浏览器配置」。
+**搜索**直接查 SQLite：短词走 `LIKE`，较长查询可走 FTS5。**提问**先查关键词和语义向量，用 RRF 合并排名，再把命中片段交给模型。音频下载发生在转写时，临时文件放在 `audio_cache/`。
 
-当前 Web 版本首先支持 OpenAI Chat Completions 兼容服务。项目仍保留 `.env` 作为 CLI/旧调用方式的兼容配置，但 Web 请求不会读取它作为默认 Key。
+Agent 研究多了一层决策循环：
 
-### 首次使用
-
-```bash
-python main.py login     # 弹出浏览器扫码登录，登录态自动落盘
-python main.py crawl     # 滚动采集收藏夹入库
-python main.py web       # 打开 http://127.0.0.1:8642
+```mermaid
+flowchart LR
+    Q[用户问题] --> P[模型输出 plan]
+    P --> T[模型输出 tool_call]
+    T --> V{工具会写入数据吗？}
+    V -- 否 --> R[搜索 / 读取 / 比较]
+    V -- 是 --> A{用户批准？}
+    A -- 是 --> W[转写 / 生成概要]
+    A -- 否 --> P
+    R --> O[观察结果并更新计划]
+    W --> O
+    O --> T
+    O --> F[模型输出 final 与来源]
 ```
 
-之后所有操作（搜索、转写、概要、分类、同步）都在 Web 页面上完成；CLI 同样可用：
+运行状态和步骤快照写入 SQLite，页面刷新或服务重启后可以继续查看会话。后台任务在处理条目之间检查取消标志，因此取消可能等当前条目处理完才生效。
 
-```bash
-python main.py search 熵增
-python main.py transcribe 10          # 转写 10 条；--all 转写全部；--model base 换模型
-python main.py summarize 10
-python main.py index                  # 预先构建语义索引；不跑的话 ask 时也会自动增量构建
-python main.py ask "RAG 面试会问哪些问题？"
-python main.py stats
+## 从哪些文件读起
+
+| 文件 | 负责什么 | 先看哪个函数或对象 |
+| --- | --- | --- |
+| `main.py` | CLI 命令分发 | `main()` 解析参数；`cmd_ask()` 串起索引、检索和回答 |
+| `app/web.py` | FastAPI 路由与后台任务 | `videos()` 返回收藏；`ask()` 执行普通问答；`agent_ask()` 启动研究；`_start_job()` 管理长任务 |
+| `app/crawler.py` | 登录、监听收藏接口、解析视频 | `login()` 保存登录态；`parse_aweme()` 整理字段；`crawl()` 滚动采集 |
+| `app/db.py` | SQLite 表、读写、FTS 搜索、会话持久化 | `init_db()` 建表；`save_favorites()` 增量入库；`search()` 查收藏；`get_conn()` 管理事务 |
+| `app/transcribe.py` | 下载临时音频并本地转写 | `run()` 批量处理；`_download_audio()` 下载；`_transcribe_file()` 调 Whisper |
+| `app/indexer.py`、`app/embedder.py` | 文本分块与向量化 | `chunk_text()` 切片；`build()` 增量建索引；`encode_docs()` 编码文本 |
+| `app/retriever.py` | 语义与关键词混合召回 | `hybrid_search()` 合并排名；`build_contexts()` 组织模型输入 |
+| `app/llm.py`、`app/llm_router.py` | CLI 模型调用与 Web 模型池 | `summarize()` / `answer()`；`parse_pool()` 校验配置；`LLMRouter.chat()` 选择服务 |
+| `app/agent/tools.py` | Agent 可用工具及写入门槛 | `ToolRegistry.call()` 校验参数并检查 `allow_write` |
+| `app/agent/runtime.py` | Agent 的计划、调用、结束循环 | `AgentExecution` 保存一次运行的计划、消息、步骤和状态 |
+| `static/index.html`、`static/app.js`、`static/app.css` | 页面结构、交互、样式 | `fetchJson()` 发 API 请求；`state` 保存当前页面状态 |
+
+### 读代码时会遇到的基础语法
+
+下面的片段对应 `app/crawler.py` 中的解析思路：
+
+```python
+def parse_aweme(item: dict) -> dict | None:
+    aweme_id = item.get("aweme_id")
+    if not aweme_id:
+        return None
+    return {"aweme_id": aweme_id, "title": item.get("desc") or ""}
 ```
 
-### 分享给别人
+- `def` 定义函数；`item: dict` 是参数类型提示；`-> dict | None` 表示返回字典或 `None`。
+- `item.get("aweme_id")` 在字段缺失时得到 `None`，避免直接取键导致异常。
+- `if not aweme_id: return None` 提前跳过无 ID 的记录。
+- `or ""` 给缺失标题一个空字符串，便于后续存库。
+- 前端 `app.js` 中的 `async function` 与 `await` 用来等待网络请求，同时让页面保持响应。
 
-把项目文件夹打包发出去即可，但**排除这些本机数据目录**（接收方会自动生成自己的）：
+另一个关键语法是 `with db.get_conn() as conn:`：`get_conn()` 是上下文管理器，正常结束会提交事务，出错会回滚，最后关闭连接。读懂它后，`db.py` 里的写入函数会容易很多。
 
+## CLI 常用命令
+
+```powershell
+python main.py login                 # 打开浏览器扫码，保存登录态
+python main.py crawl                 # 同步收藏元数据
+python main.py stats                 # 查看数量
+python main.py search "机器学习"      # 搜索标题、标签、作者与转写
+python main.py transcribe 10         # 转写 10 条；--all 处理全部待转写条目
+python main.py summarize 10          # 为已转写条目生成概要，需 .env
+python main.py index                 # 增量构建本地语义索引
+python main.py ask "这些视频如何解释 RAG？"  # 检索并调用模型回答，需 .env
+python main.py web --port 8642       # 启动 Web 页面
 ```
-排除：.venv/  data/  browser_data/  models/  audio_cache/  __pycache__/  .env
-保留：start.bat  main.py  app/  static/  requirements.txt  .env.example  README.md
-```
 
-接收方只需装 Python，双击 `start.bat`，填一次自己的 API key 就能用。
+`ask` 会尝试自动补建索引；手动运行 `index --all` 可全量重建。Web 的「数据维护」提供同步、转写、概要、分类和重建索引操作。分类由模型先根据收藏内容提出类别，再批量归类；结果存入数据库。
 
-## 技术要点
+## 常见问题与选择
 
-- **采集不逆向**：Playwright 打开真实浏览器，旁听 `aweme/favorite` 与 `listcollection` 接口响应，签名参数由页面自己生成
-- **FTS5 trigram**：中文按 3 字滑窗建索引，支持任意子串匹配；`search()` 内 FTS 与 LIKE 双路径自动切换
-- **混合检索（问 AI）**：`app/retriever.py` 把本地 bge 语义向量（float32 存进 SQLite BLOB，numpy 暴力余弦；语料千级下矩阵乘微秒级，故不引入 sqlite-vec）与 FTS 关键词两路结果用 **RRF** 融合。关键词路只搜「有效转写」、全词 AND 优先、bm25 列权重（标题 8 / 标签 3 / 作者 2 / 转写 1）；上下文取**命中片段**（向量命中的转写块，或问题词附近的窗口），不再固定取转写开头
-- **索引自愈**：每个视频存内容签名（sig），转写/概要更新只重嵌入该视频；`ask` 前自动检查补建，`meta.embed_model` 变化（换模型）触发全量重建；向量模型缺失时向量路静默跳过，问答退化为关键词检索，不会报错卡住
-- **即时下载转写**：视频直链有时效，转写时才用 yt-dlp + cookies 拉音频，失败重试 3 次（随机退避），仍失败标记「音频不可用」不阻塞队列
-- **Agent 决策循环**（`app/agent/`）：模型每步只输出一个 JSON 决策（`plan` / `tool_call` / `final`），非法 JSON 允许一次自动纠错；计划带依赖关系，未满足依赖的调用会被拒绝并要求重排；写类工具（转写/概要）默认拦截，经用户批准后才执行；每步快照落盘（`agent_runs` + `agent_events`），服务重启或超时后可从断点继续；视频内容一律视为数据而非指令，防提示注入
-- **协作式取消**：后台任务在条目间检查取消标志，已抓到的数据照常入库
-- **容错优先**：接口解析层全 `.get()` 容错，抖音字段改版只影响解析不影响整体
+| 看到什么 | 先检查什么 | 为什么 |
+| --- | --- | --- |
+| 搜索结果少 | 是否只同步了元数据、尚未转写 | 标题能搜到的词有限，转写会扩大文本范围 |
+| 问答找不到相关视频 | 是否已有转写或概要、BGE 模型是否下载 | 语义索引以已有内容为基础；缺 BGE 时只走关键词 |
+| 提示重新登录 | 在页面重新扫码，再重试同步或转写 | 登录态和视频下载地址都可能过期 |
+| 转写慢 | 先试少量；CLI 可用 `--model base` | 小模型通常更快，但识别质量可能变化 |
+| 模型返回 401 | 检查 Web 模型设置或 CLI `.env` 的密钥 | Web 与 CLI 使用不同的配置入口 |
 
-## 常见问题
+读完后，可以继续追问这些“为什么”：**为什么只监听浏览器已经发出的请求？为什么问答要合并关键词和语义结果？为什么 Agent 的转写操作要单独批准？** 这些问题分别对应采集稳定性、召回质量和数据修改边界，也适合用来决定下一步要优化哪一层。
 
-| 现象 | 处理 |
-|---|---|
-| 搜索命中为 0 | 换更短的关键词（≤2 字走 LIKE 路径）；或先转写更多视频扩大语料 |
-| 问答答非所问 / 检索不到相关视频 | 页面点「重建语义索引」；语义检索需要 `models/bge-small-zh-v1.5`（start.bat 会自动下载，也可手动 `python scripts/download_model.py bge`），缺模型时会退化为纯关键词检索 |
-| 转写报 "Fresh cookies needed" | 登录过期，页面上点「扫码登录」重新登录后同步 |
-| 转写慢 | 默认 small 模型 CPU 推理，可 `--model base` 或 `tiny` 换速度 |
-| LLM 报 401/余额 | 检查 `.env` 的 key；key 泄露过请及时在服务商处轮换 |
-| 想重置 | 关服务后删除 `data/`（数据库）、`browser_data/`（登录态）即可 |
+## 本地文件与隐私
 
-## 隐私
-
-收藏数据、登录态、转写文本全部存在本机；`.env`、`browser_data/`、`data/` 均已在 `.gitignore` 中，不会被提交。
+`data/` 存收藏、转写、概要、向量和会话；`browser_data/` 存抖音登录态；`models/` 存下载的模型；`audio_cache/` 存临时音频。它们都应留在本机。Web 模型配置保存在浏览器本地存储中，共享电脑用完可在「模型设置」清除；概要、分类、问答会向所选模型服务发送必要文本。分享项目时只分享源代码和 `.env.example`，不要打包这些本地目录或 `.env`。
