@@ -1,12 +1,31 @@
-__pycache__/
-*.pyc
+# Python environment and generated files
 .venv/
-browser_data/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Personal data and credentials
+.env
+.env.*
+!.env.example
 data/
+browser_data/
 audio_cache/
 models/
-.env
+
+# Local tools, temporary screenshots, and logs
+.playwright-cli/
+output/playwright/
 .workbuddy/
 .learnings/
-server-restart*.log
-server.*.log
+.proc_time.txt
+server*.log
+*.log
