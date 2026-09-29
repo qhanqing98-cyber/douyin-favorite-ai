@@ -1,0 +1,105 @@
+- generic [active] [ref=e1]:
+  - link "跳到主要内容" [ref=e2] [cursor=pointer]:
+    - /url: "#mainContent"
+  - generic [ref=e3]:
+    - complementary "应用导航" [ref=e4]:
+      - generic [ref=e10]:
+        - generic [ref=e11]: 浮光
+        - generic [ref=e12]: 收藏研究台
+      - generic [ref=e13]:
+        - generic [ref=e15]: 浮
+        - paragraph [ref=e16]: PRIVATE RESEARCH SPACE
+        - heading "让收藏变成答案" [level=2] [ref=e17]
+        - paragraph [ref=e18]: 把散落的视频、转写和观点，组织成可以继续追问的研究。
+        - button "新建研究" [ref=e19] [cursor=pointer]:
+          - generic [aria-hidden] [ref=e21]: ↗
+        - generic "收藏库统计" [ref=e22]:
+          - generic [ref=e23]:
+            - strong [ref=e24]: "539"
+            - generic [ref=e25]: 收藏
+          - generic [ref=e26]:
+            - strong [ref=e27]: "137"
+            - generic [ref=e28]: 转写
+          - generic [ref=e29]:
+            - strong [ref=e30]: "137"
+            - generic [ref=e31]: 概要
+      - generic [ref=e32]:
+        - generic [ref=e33]:
+          - generic [ref=e34]: 研究会话
+          - generic [ref=e35]: "3"
+        - generic [ref=e36]:
+          - generic [aria-hidden] [ref=e37]: ⌕
+          - searchbox "搜索研究会话" [ref=e38]
+        - list [ref=e39]:
+          - listitem [ref=e40] [cursor=pointer]:
+            - generic [ref=e41]: 找出值得进一步转写的高价值视频
+            - generic "已完成" [ref=e42]
+            - generic [ref=e43]: 转写第二梯队
+          - listitem [ref=e44] [cursor=pointer]:
+            - generic [ref=e45]: 总结收藏中反复出现的核心主题
+            - generic "已完成" [ref=e46]
+            - generic [ref=e47]: 你有什么观点
+          - listitem [ref=e48] [cursor=pointer]:
+            - generic [ref=e49]: 找出值得进一步转写的高价值视频
+            - generic "已完成" [ref=e50]
+            - generic [ref=e51]: 继续执行建议
+    - generic [ref=e52]:
+      - banner [ref=e53]:
+        - navigation "主要功能" [ref=e54]:
+          - button "Agent 研究" [ref=e55] [cursor=pointer]:
+            - generic [aria-hidden] [ref=e56]: ◉
+          - button "收藏库" [ref=e58] [cursor=pointer]:
+            - generic [aria-hidden] [ref=e59]: ▧
+          - button "数据维护" [ref=e61] [cursor=pointer]:
+            - generic [aria-hidden] [ref=e62]: ⌁
+          - button "模型设置" [ref=e64] [cursor=pointer]:
+            - generic [aria-hidden] [ref=e65]: ⚙
+        - generic [ref=e67]: 本地知识库
+      - main [ref=e69]:
+        - generic [ref=e70]:
+          - generic [ref=e71]:
+            - generic [ref=e72]:
+              - generic [ref=e73]: AGENT RESEARCH
+              - heading "新建研究" [level=1] [ref=e74]
+              - paragraph [ref=e75]: 提出问题，Agent 会规划任务并检索你的收藏。
+            - generic [ref=e76]:
+              - button "重命名" [ref=e77] [cursor=pointer]
+              - button "删除会话" [ref=e78] [cursor=pointer]
+          - generic [ref=e79]:
+            - region "研究对话" [ref=e80]:
+              - generic [ref=e82]:
+                - generic [ref=e83]: ✦
+                - heading "从收藏里找到真正有用的线索" [level=2] [ref=e84]
+                - paragraph [ref=e85]: Agent 会自己拆分任务、搜索收藏、读取转写，并在需要修改数据时向你确认。
+                - generic [ref=e86]:
+                  - button "比较我收藏里关于个人成长的不同观点 ↗" [ref=e87] [cursor=pointer]
+                  - button "整理最近收藏的 AI 学习路线 ↗" [ref=e88] [cursor=pointer]
+                  - button "找出值得进一步转写的高价值视频 ↗" [ref=e89] [cursor=pointer]
+                  - button "总结收藏中反复出现的核心主题 ↗" [ref=e90] [cursor=pointer]
+              - generic [ref=e91]:
+                - generic [ref=e92]: 给 Agent 的问题
+                - textbox "给 Agent 的问题" [ref=e93]:
+                  - /placeholder: 继续追问，或开始一个新的研究主题…
+                - generic [ref=e94]:
+                  - generic [ref=e95]: Enter 发送 · Shift + Enter 换行
+                  - button "发送" [ref=e96] [cursor=pointer]:
+                    - generic [aria-hidden] [ref=e98]: ↗
+            - complementary "Agent 执行详情" [ref=e99]:
+              - generic [ref=e101]:
+                - text: LIVE TRACE
+                - heading "执行详情" [level=2] [ref=e102]
+              - generic [ref=e103]: 等待任务
+              - generic [ref=e104]:
+                - heading "任务计划" [level=3] [ref=e105]
+                - generic [ref=e106]: 开始研究后，这里会显示 Agent 的任务拆分。
+              - generic [ref=e108]:
+                - heading "执行轨迹" [level=3] [ref=e109]
+                - generic [ref=e110]: 工具调用会按时间出现在这里。
+              - generic [ref=e112]:
+                - heading "引用来源" [level=3] [ref=e113]
+                - generic [ref=e114]: 检索到的引用来源会出现在这里。
+      - contentinfo "页脚" [ref=e116]:
+        - generic [ref=e117]: 本地服务已连接 · 数据仅存本机
+        - generic [ref=e120]: 数据仅存本机 · 转写与问答调用 LLM API
+        - generic [ref=e121]: 浮光 · 抖音收藏研究台
+  - status
