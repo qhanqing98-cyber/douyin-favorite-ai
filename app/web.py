@@ -32,7 +32,9 @@ db.init_db()
 # 每条数据都是独立写库的，中断后重跑自动续上。
 _job = {"id": None, "running": False, "name": "", "progress": "", "error": "",
         "done": 0, "total": 0, "cancel": False, "started_at": 0.0,
-        "eta_seconds": None, "eta_updated_at": 0.0}
+        "eta_seconds": None, "eta_updated_at": 0.0,
+        # 分类任务里被降级成「其他」的条数与原因（重试 3 档仍失败的批次）
+        "degraded": 0, "degraded_note": ""}
 _lock = threading.Lock()
 _agent_lock = threading.Lock()
 _agent_runs: dict[str, dict] = {}
@@ -80,6 +82,24 @@ def _start_job(name: str, fn) -> None:
             )
 
     threading.Thread(target=wrapper, daemon=True).start()
+
+
+def _record_degraded_batch(count: int, reason: str) -> None:
+    """记录一个被降级为「其他」的批次，供任务收尾时汇报。
+
+    单批分类在 3 档重试后仍失败时不再中断整个任务——全量重分是原子替换，
+    一批失败会让已经跑完的批次全部作废。降级保留进度，同时把原因留在
+    任务状态里，让用户知道有多少条是靠兜底归类、以及为什么。
+    """
+    with _lock:
+        _job["degraded"] += count
+        _job["degraded_note"] = reason[:200]
+
+
+def _degraded_count() -> int:
+    """当前被降级为「其他」的条数（供熔断判断批次是否失败）。"""
+    with _lock:
+        return _job["degraded"]
 
 
 def _set_progress(**fields) -> None:
@@ -981,7 +1001,9 @@ def propose_categories(router: LLMRouter) -> list[str] | None:
         '只输出 JSON 数组，格式 ["类别1", "类别2", ...]，不要输出任何其他文字。\n\n' + listing
     )
     try:
-        text = router.chat([{"role": "user", "content": prompt}], max_tokens=500).strip()
+        text = router.chat_stream(
+            [{"role": "user", "content": prompt}], lambda _delta: None, max_tokens=1000,
+        ).strip()
         cats = _extract_json_value(
             text, list, lambda value: bool(_normalize_categories(value)),
         )
@@ -1008,6 +1030,15 @@ def _parse_category_mapping(text: str, rows, categories: list[str]) -> dict[str,
 
 
 def _classify_batch(router: LLMRouter, rows, categories: list[str]) -> dict[str, str]:
+    """把一批视频交给 LLM 归类，返回 {aweme_id: 类别}。
+
+    重试 3 档 max_tokens，并且第二次起把大预算换成非流式调用：
+    流式下推理模型的思维链会先占满输出窗口，非流式拿到的 content 更稳
+    （实测 deepseek-reasoner 流式空内容时，非流式同参数能正常返回）。
+
+    最终仍失败不抛异常——整批归入「其他」并记录，避免单批拖垮整个任务
+    （全量重分是全有全无的原子替换，一批失败会让已跑完的批次全部作废）。
+    """
     listing = "\n".join(
         f"{r['aweme_id']}|{(r['title'] or '')[:50]}|{r['author'] or ''}|{r['tags'] or ''}"
         for r in rows
@@ -1020,21 +1051,35 @@ def _classify_batch(router: LLMRouter, rows, categories: list[str]) -> dict[str,
         "视频列表（id|标题|作者|标签）：\n" + listing
     )
     last_error = ""
-    for attempt, max_tokens in enumerate((3000, 5000), start=1):
+    # 三档尝试：流式小预算 → 非流式中预算 → 非流式大预算。
+    # 非流式带 stream=False，由 _variants 生成对应参数。
+    for attempt, max_tokens, streaming in ((1, 3000, True), (2, 6000, False), (3, 12000, False)):
         request = prompt
         if attempt > 1:
-            request += "\n上一次输出无法解析。请重新输出完整、严格的 JSON 对象，不要包含解释或遗漏 ID。"
-        response = router.chat([{"role": "user", "content": request}], max_tokens=max_tokens)
+            request += "\n上一次输出无法解析。请只输出 JSON 对象，不要解释、不要遗漏任何 ID。"
         try:
+            if streaming:
+                response = router.chat_stream(
+                    [{"role": "user", "content": request}], lambda _delta: None,
+                    max_tokens=max_tokens,
+                )
+            else:
+                response = router.chat(
+                    [{"role": "user", "content": request}], max_tokens=max_tokens,
+                )
             return _parse_category_mapping(response, rows, categories)
-        except ValueError as exc:
-            last_error = str(exc)
-    raise RuntimeError(f"模型连续两次未返回可用的分类 JSON：{last_error}")
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+    _record_degraded_batch(len(rows), last_error)
+    return {str(row["aweme_id"]): "其他" for row in rows}
 
 
 def run_classification(router: LLMRouter, *, reclassify_all: bool,
                        progress, should_stop) -> int:
     """执行分类；全量重分先暂存在内存，成功后再原子替换旧结果。"""
+    with _lock:
+        _job["degraded"] = 0
+        _job["degraded_note"] = ""
     with db.get_conn() as conn:
         total = conn.execute(
             "SELECT COUNT(*) FROM favorites" +
@@ -1052,6 +1097,10 @@ def run_classification(router: LLMRouter, *, reclassify_all: bool,
     done = 0
     offset = 0
     staged: dict[str, str] = {}
+    # 降级熔断：单批失败可以跳过（保住已跑完的批次），但降级比例过高说明
+    # 模型整体不可用，此时若照常替换整库，会把大量条目写成「其他」——
+    # 那等于用坏结果覆盖旧结果。超阈值即中止，原子替换不执行，旧分类原样保留。
+    MAX_DEGRADED_RATIO = 0.2
     if not reclassify_all:
         db.set_meta("categories", json.dumps(categories, ensure_ascii=False))
 
@@ -1062,7 +1111,22 @@ def run_classification(router: LLMRouter, *, reclassify_all: bool,
         if not rows:
             break
         progress(done=done, total=total, progress=f"正在分类 {done + 1}-{done + len(rows)} / {total}")
+        before = _degraded_count()
         assignments = _classify_batch(router, rows, categories)
+        if _degraded_count() > before:
+            with _lock:
+                note = _job["degraded_note"]
+            degraded_now = _degraded_count()
+            if degraded_now / max(total, 1) > MAX_DEGRADED_RATIO:
+                raise RuntimeError(
+                    f"模型未能返回可用分类结果的条目已达 {degraded_now}/{total}，"
+                    f"已中止并保留原有分类（原因：{note[:120]}）"
+                )
+            progress(
+                done=done, total=total,
+                progress=f"第 {done + 1}-{done + len(rows)} 批模型未返回有效结果，"
+                         f"已跳过并继续（原因：{note[:80]}）",
+            )
         if should_stop():
             break
         if reclassify_all:
@@ -1077,6 +1141,13 @@ def run_classification(router: LLMRouter, *, reclassify_all: bool,
         if done != total:
             raise RuntimeError("分类结果数量不完整，已保留原有分类")
         db.replace_all_categories(staged, categories)
+    with _lock:
+        degraded = _job["degraded"]
+    if degraded:
+        progress(
+            done=done, total=total,
+            progress=f"完成：{total - degraded} 条正常分类，{degraded} 条模型未返回有效结果已归入「其他」",
+        )
     return done
 
 

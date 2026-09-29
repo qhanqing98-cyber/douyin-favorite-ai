@@ -6,6 +6,7 @@ the persisted Agent state.
 """
 from __future__ import annotations
 
+import re
 import threading
 import time
 import uuid
@@ -32,6 +33,10 @@ class ProviderRequestError(LLMRouterError):
         self.status_code = status_code
 
 
+class EmptyProviderResponseError(RuntimeError):
+    """Provider 接受了请求但没有给出可消费的正文。"""
+
+
 def _status_code(exc: Exception) -> int | None:
     value = getattr(exc, "status_code", None)
     return value if isinstance(value, int) else None
@@ -43,10 +48,21 @@ def _error_text(exc: Exception) -> str:
 
 
 def _is_parameter_error(exc: Exception) -> bool:
+    """是否是「这个参数服务端不认」的错误——只有这类错误才值得换参数变体重试。
+
+    用「拒绝语气」短语判断，而不是裸参数名：错误文案里出现 max_tokens 这个
+    词不代表它是参数不兼容（例如“模型流式响应为空（finish_reason=length）”
+    也可能被上游包装进含 max_tokens 的说明），按裸词匹配会导致该降级时不降级。
+    """
+    if isinstance(exc, EmptyProviderResponseError):
+        # 空内容不是参数问题，但值得换参数变体重试（正是 max_tokens 预算被
+        # 思维链吃光的典型症状），所以这里显式放行给 _variants 继续下一个变体。
+        return True
     text = _error_text(exc).lower()
     return any(token in text for token in (
         "unsupported parameter", "unknown parameter", "unrecognized request argument",
-        "max_tokens", "max_completion_tokens", "temperature",
+        "unrecognized parameter", "invalid parameter", "not supported",
+        "does not support", "unsupported value",
     ))
 
 
@@ -59,8 +75,26 @@ def classify_provider_error(exc: Exception) -> ProviderRequestError:
 
 
 def _reasoning_model(model: str) -> bool:
-    normalized = model.lower().split("/")[-1]
-    return normalized.startswith(("gpt-5", "o1", "o3", "o4"))
+    """判断模型是否为「思维链与答案分预算」的推理模型。
+
+    推理模型必须优先用 max_completion_tokens：实测 deepseek-reasoner 传
+    max_tokens 时思维链会吃光整个预算，finish_reason=length 且 content 为空串，
+    表现为“模型返回空内容”。传 max_completion_tokens 时两者独立计费，答案稳定输出。
+
+    用模式匹配而非硬编码列表，避免新推理模型（r1/qwq 等）漏判后静默退化。
+    """
+    normalized = model.lower().split("/")[-1].strip()
+    if normalized.startswith(("gpt-5", "o1", "o3", "o4")):
+        return True
+    # deepseek-reasoner / deepseek-r1 / deepseek-r1-0528 / deepseek-v3-reasoner
+    if normalized.startswith("deepseek") and (
+        "reasoner" in normalized or re.search(r"-r1(?:[-.]|$)", normalized)
+    ):
+        return True
+    # qwq / qwq-32b / qwen-qwq、以及常见 reasoner/thinking 命名
+    if "qwq" in normalized or "reasoner" in normalized or "-thinking" in normalized:
+        return True
+    return False
 
 
 def _enabled_value(value) -> bool:
@@ -156,14 +190,53 @@ def parse_pool(payload: list[dict] | None) -> list[PoolEndpoint]:
 class OpenAICompatibleProvider:
     """OpenAI Chat Completions compatible provider with parameter fallback."""
 
+    @classmethod
+    def _content_text(cls, value) -> str:
+        """兼容字符串和部分网关返回的 content parts 数组。"""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            return "".join(cls._content_text(item) for item in value)
+        if isinstance(value, dict):
+            for key in ("text", "content", "output_text"):
+                if key in value:
+                    return cls._content_text(value[key])
+            return ""
+        for attr in ("text", "content", "output_text"):
+            nested = getattr(value, attr, None)
+            if nested is not None and nested is not value:
+                return cls._content_text(nested)
+        return ""
+
+    @staticmethod
+    def _empty_message(choice, message) -> str:
+        finish_reason = getattr(choice, "finish_reason", None) or "unknown"
+        extra = getattr(message, "model_extra", None) or {}
+        extra_fields = sorted(
+            str(key) for key, value in extra.items()
+            if value not in (None, "", [], {})
+        )
+        hint = f"，附加字段={','.join(extra_fields)}" if extra_fields else ""
+        return f"模型返回空内容（finish_reason={finish_reason}{hint}）"
+
     @staticmethod
     def _variants(endpoint: PoolEndpoint, messages: list[dict], max_tokens: int,
                   stream: bool) -> list[dict]:
+        """按「最可能成功」排序的参数变体，逐个尝试直到有一个被服务端接受。
+
+        两组预算字段的区别（实测 deepseek-reasoner）：
+        - max_completion_tokens：思维链与答案**分开**计费，答案稳定输出 → 推理模型首选
+        - max_tokens：思维链与答案**共用**预算，思维链吃光后 finish_reason=length
+          且 content 为空串 → 推理模型必须靠后，仅作兼容性兜底
+        """
         base = {"model": endpoint.model, "messages": messages, "stream": stream}
-        modern = {**base, "max_completion_tokens": max_tokens}
-        legacy = {**base, "max_tokens": max_tokens, "temperature": 0.3}
-        no_temperature = {**base, "max_tokens": max_tokens}
-        return [modern, no_temperature, legacy] if _reasoning_model(endpoint.model) else [legacy, modern, no_temperature]
+        memory_cap = {**base, "max_completion_tokens": max_tokens}
+        token_cap = {**base, "max_tokens": max_tokens}
+        token_cap_no_temp = {**base, "max_tokens": max_tokens, "temperature": 0.3}
+        if _reasoning_model(endpoint.model):
+            # 推理模型：正确的预算字段优先，再退到只换字段名，最后才试旧字段。
+            return [memory_cap, {**base, "max_completion_tokens": max_tokens, "temperature": 1}, token_cap]
+        return [token_cap_no_temp, memory_cap, token_cap]
 
     @classmethod
     def chat(cls, endpoint: PoolEndpoint, messages: list[dict], max_tokens: int) -> str:
@@ -171,7 +244,14 @@ class OpenAICompatibleProvider:
         for params in cls._variants(endpoint, messages, max_tokens, False):
             try:
                 response = endpoint.client().chat.completions.create(**params)
-                return (response.choices[0].message.content or "").strip()
+                if not response.choices:
+                    raise EmptyProviderResponseError("模型返回空 choices")
+                choice = response.choices[0]
+                message = choice.message
+                content = cls._content_text(getattr(message, "content", None)).strip()
+                if not content:
+                    raise EmptyProviderResponseError(cls._empty_message(choice, message))
+                return content
             except Exception as exc:
                 last = exc
                 if not _is_parameter_error(exc):
@@ -185,16 +265,24 @@ class OpenAICompatibleProvider:
         last: Exception | None = None
         for params in cls._variants(endpoint, messages, max_tokens, True):
             parts: list[str] = []
+            finish_reason = None
             try:
                 stream = endpoint.client().chat.completions.create(**params)
                 for chunk in stream:
                     if not chunk.choices:
                         continue
-                    delta = chunk.choices[0].delta.content or ""
+                    choice = chunk.choices[0]
+                    finish_reason = getattr(choice, "finish_reason", None) or finish_reason
+                    delta = cls._content_text(getattr(choice.delta, "content", None))
                     if delta:
                         parts.append(delta)
                         on_delta(delta)
-                return "".join(parts).strip()
+                result = "".join(parts).strip()
+                if not result:
+                    raise EmptyProviderResponseError(
+                        f"模型流式响应为空（finish_reason={finish_reason or 'unknown'}）"
+                    )
+                return result
             except Exception as exc:
                 last = exc
                 # Once text was emitted, retrying would duplicate user-visible text.
